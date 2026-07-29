@@ -8,7 +8,7 @@ Windows 10／11 x64 的低干擾朋友測試版。程式會在選角與遊戲中
 
 從 [v1.0.0-test prerelease](https://github.com/weib10/lol-performance-overlay/releases/tag/v1.0.0-test) 下載：
 
-- `LoL即時表現Overlay-朋友測試版-v1.zip`
+- `LoL-Performance-Overlay-Friend-Test-v1.zip`
 - 解壓後先開啟 `先看這裡.html`
 - 再執行 `LoL即時表現Overlay.exe`
 
