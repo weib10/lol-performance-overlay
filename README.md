@@ -6,16 +6,16 @@ Windows 10／11 x64 的低干擾朋友測試版。程式會在選角與遊戲中
 
 ## 下載測試版
 
-從 [v1.0.0-test prerelease](https://github.com/weib10/lol-performance-overlay/releases/tag/v1.0.0-test) 下載：
+從 [v1.0.1-test prerelease](https://github.com/weib10/lol-performance-overlay/releases/tag/v1.0.1-test) 下載：
 
-- `LoL-Performance-Overlay-Friend-Test-v1.zip`
+- `LoL-Performance-Overlay-Friend-Test-v1.0.1.zip`
 - 解壓後先開啟 `先看這裡.html`
 - 再執行 `LoL即時表現Overlay.exe`
 
 檔案核對：
 
-- ZIP SHA-256：`9C4827F257A119CDAC58039BB919F7DCF82CE099445AF7D1CCD66B5256862335`
-- EXE SHA-256：`93603ABCD590EC3161E30F9DF0FE8BF1B3E7A2F977733FD2B6AF43C6505E41FF`
+- ZIP SHA-256：`34335F2ED45D6F134ACD84E81B724149D20AC0F76A0A02C82974729C9D84317B`
+- EXE SHA-256：`A6102D70CD4E4710EDE2311491357C70FC937BB8766F800351C628F58CD5949E`
 
 完整的非技術使用、安全與移除說明也收錄在 [`docs/先看這裡.html`](docs/先看這裡.html)。
 
