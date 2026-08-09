@@ -8,6 +8,7 @@ namespace LolPerformanceOverlay.UI;
 public sealed class SettingsWindow : Window
 {
     private readonly CheckBox _startup;
+    private readonly CheckBox _positionLocked;
     private readonly Slider _opacity;
     private readonly TextBox _hotkey;
     private readonly TextBlock _validation;
@@ -18,7 +19,7 @@ public sealed class SettingsWindow : Window
         _working = settings.Clone();
         Title = "LoL 即時表現 Overlay 設定";
         Width = 420;
-        Height = 330;
+        Height = 380;
         WindowStartupLocation = WindowStartupLocation.CenterScreen;
         ResizeMode = ResizeMode.NoResize;
         Background = new SolidColorBrush(Color.FromRgb(20, 25, 36));
@@ -36,6 +37,15 @@ public sealed class SettingsWindow : Window
             Foreground = Brushes.White
         };
         root.Children.Add(_startup);
+
+        _positionLocked = new CheckBox
+        {
+            Content = "鎖定 Overlay 位置（整個 Overlay 不接收滑鼠）",
+            IsChecked = settings.PositionLocked,
+            Margin = new Thickness(0, 0, 0, 14),
+            Foreground = Brushes.White
+        };
+        root.Children.Add(_positionLocked);
 
         root.Children.Add(Heading("透明度", 13));
         _opacity = new Slider
@@ -96,6 +106,7 @@ public sealed class SettingsWindow : Window
         }
 
         _working.StartWithWindows = _startup.IsChecked == true;
+        _working.PositionLocked = _positionLocked.IsChecked == true;
         _working.Opacity = _opacity.Value;
         _working.Hotkey = _hotkey.Text.Trim();
         DialogResult = true;

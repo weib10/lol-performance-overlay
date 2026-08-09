@@ -1,5 +1,7 @@
 using System.Text.Json;
+using System.Text.Json.Serialization;
 using Microsoft.Win32;
+using LolPerformanceOverlay.Core;
 
 namespace LolPerformanceOverlay.Services;
 
@@ -9,6 +11,7 @@ public sealed class AppSettings
     public double Top { get; set; } = double.NaN;
     public double Opacity { get; set; } = 0.92;
     public bool StartWithWindows { get; set; }
+    public bool PositionLocked { get; set; }
     public string Hotkey { get; set; } = "Ctrl+Shift+O";
 
     public AppSettings Clone() =>
@@ -18,14 +21,20 @@ public sealed class AppSettings
             Top = Top,
             Opacity = Opacity,
             StartWithWindows = StartWithWindows,
+            PositionLocked = PositionLocked,
             Hotkey = Hotkey
         };
 }
 
 public sealed class SettingsStore
 {
-    private static readonly JsonSerializerOptions JsonOptions = new() { WriteIndented = true };
+    internal static readonly JsonSerializerOptions JsonOptions = new()
+    {
+        WriteIndented = true,
+        NumberHandling = JsonNumberHandling.AllowNamedFloatingPointLiterals
+    };
     private readonly string _path;
+    private readonly SemaphoreSlim _saveGate = new(1, 1);
 
     public SettingsStore()
     {
@@ -33,6 +42,12 @@ public sealed class SettingsStore
             Environment.GetFolderPath(Environment.SpecialFolder.LocalApplicationData),
             "LolPerformanceOverlay",
             "settings.json");
+    }
+
+    internal SettingsStore(string path)
+    {
+        ArgumentException.ThrowIfNullOrWhiteSpace(path);
+        _path = Path.GetFullPath(path);
     }
 
     public AppSettings Load()
@@ -44,7 +59,17 @@ public sealed class SettingsStore
                 return new AppSettings();
             }
 
-            return JsonSerializer.Deserialize<AppSettings>(File.ReadAllText(_path)) ?? new AppSettings();
+            var settings = JsonSerializer.Deserialize<AppSettings>(File.ReadAllText(_path), JsonOptions) ??
+                           new AppSettings();
+            settings.Left = double.IsFinite(settings.Left) ? settings.Left : double.NaN;
+            settings.Top = double.IsFinite(settings.Top) ? settings.Top : double.NaN;
+            settings.Opacity = double.IsFinite(settings.Opacity)
+                ? Math.Clamp(settings.Opacity, 0.35, 1)
+                : 0.92;
+            settings.Hotkey = string.IsNullOrWhiteSpace(settings.Hotkey)
+                ? "Ctrl+Shift+O"
+                : settings.Hotkey.Trim();
+            return settings;
         }
         catch
         {
@@ -54,17 +79,25 @@ public sealed class SettingsStore
 
     public async Task SaveAsync(AppSettings settings, CancellationToken cancellationToken = default)
     {
+        ArgumentNullException.ThrowIfNull(settings);
+        var lockTaken = false;
         try
         {
-            Directory.CreateDirectory(Path.GetDirectoryName(_path)!);
-            await File.WriteAllTextAsync(
-                _path,
-                JsonSerializer.Serialize(settings, JsonOptions),
-                cancellationToken);
+            var serialized = JsonSerializer.Serialize(settings.Clone(), JsonOptions);
+            await _saveGate.WaitAsync(cancellationToken).ConfigureAwait(false);
+            lockTaken = true;
+            await AtomicFile.WriteAllTextAsync(_path, serialized, cancellationToken).ConfigureAwait(false);
         }
         catch
         {
             // Settings persistence must never interrupt the overlay.
+        }
+        finally
+        {
+            if (lockTaken)
+            {
+                _saveGate.Release();
+            }
         }
     }
 }

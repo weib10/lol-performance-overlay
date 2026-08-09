@@ -1,4 +1,4 @@
-using LolPerformanceOverlay.Infrastructure;
+using LolPerformanceOverlay.Core;
 using Xunit;
 
 namespace LolPerformanceOverlay.Tests;

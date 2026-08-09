@@ -21,4 +21,7 @@
     <DebugSymbols>false</DebugSymbols>
     <InvariantGlobalization>false</InvariantGlobalization>
   </PropertyGroup>
+  <ItemGroup>
+    <ProjectReference Include="..\LolPerformanceOverlay.Core\LolPerformanceOverlay.Core.csproj" />
+  </ItemGroup>
 </Project>

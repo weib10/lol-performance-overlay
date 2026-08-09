@@ -29,9 +29,9 @@
 - 技術：.NET 8、WPF、自包含單檔 EXE
 - 顯示模式：Dot、Compact、Expanded
 - 資料來源：League Client 本機資料、遊戲內 `127.0.0.1:2999`、Riot 靜態素材
-- 歷史資料：尚未實作；官方 Riot API、OP.GG 公開資料與合成資料 adapter 均列入評估
-- 現有自動測試：17 個測試案例
-- 現有朋友包：EXE + 完全離線 HTML
+- 歷史資料：已有 source-neutral model、Synthetic provider 與 unavailable／policy-disabled fallback；沒有合規 live provider 時不查真人資料，OP.GG 僅提供使用者主動開啟的瀏覽器連結
+- 自動測試：核心測試已拆成 `net8.0`，可在 Linux 執行；Windows shell 的編譯與互動仍由 Windows runner／真機負責
+- 候選包：repository 內的共用 PackageBuilder 由 Linux shell 與 Windows PowerShell 入口共同呼叫，產生 EXE + 完全離線 HTML 的兩檔 ZIP、manifest 與 SHA-256
 - 現有 Release 不應直接重新命名為正式版；它是比較修正前後行為的基準。
 
 目前已知還沒有足夠證據證明：真實長時間對局順暢、多螢幕與 DPI 完整、Client 重啟可靠、一般朋友能無協助完成所有操作，以及乾淨環境可重現打包。
@@ -127,7 +127,7 @@ Session loop 從 WPF startup 啟動，async iterator、HTTP await、JSON parsing
 
 - 除了真正的 Button、Slider、TextBox 等控制項外，卡片大部分背景都應可拖曳。
 - 提供可看見但不搶注意力的拖曳 affordance，例如細小 grip 或拖曳游標。
-- 可選擇「鎖定位置」；鎖定後才讓非控制區完全 click-through。
+- 可選擇「鎖定位置」；為避免單一 HWND 的跨程序背景穿透留下輸入陷阱，鎖定後整個 Overlay 都不接收滑鼠，並由快捷鍵／系統匣解除鎖定或切換顯示。未鎖定時控制項仍可點，其餘背景使用一致拖曳手勢。
 - 縮小、展開、設定與關閉的控制目標不能過小。
 - 面板切換尺寸後不能跳到螢幕外。
 
@@ -288,11 +288,13 @@ Session loop 從 WPF startup 啟動，async iterator、HTTP await、JSON parsing
 
 - `src/LolPerformanceOverlay/App.xaml.cs`：生命週期、phase 行為、session loop。
 - `src/LolPerformanceOverlay/UI/OverlayWindow.cs`：目前渲染、拖曳、click-through 的主要問題區。
-- `src/LolPerformanceOverlay/Core/PerformanceScorer.cs`：評分、信心與 EMA。
+- `src/LolPerformanceOverlay.Core/`：可在 Linux 測試的互動、更新、歷史 profile、評分與安全 snapshot 邊界。
 - `src/LolPerformanceOverlay/Infrastructure/LeagueSessionSource.cs`：LCU／2999 polling 與 reconnect。
 - `src/LolPerformanceOverlay/Infrastructure/DataDragonProvider.cs`：靜態資料與圖片快取。
 - `src/LolPerformanceOverlay/Infrastructure/ReplaySessionSource.cs`：離線 UX／效能測試基礎。
-- `tests/LolPerformanceOverlay.Tests/`：現有 17 個核心與解析測試。
+- `tests/LolPerformanceOverlay.Tests/`：跨平台核心、解析、互動、歷史資料、更新流程與效能／soak 測試。
+- `eng/PackageBuilder/`：restore、test、cross-publish、HTML hash 注入、掃描、ZIP 與 manifest 的唯一實作。
+- `scripts/package.sh`、`scripts/package.ps1`：Linux 與 Windows 的一鍵入口。
 - `docs/先看這裡.html`：朋友實際看到的離線說明。
 - `docs/HISTORICAL_DATA_RESEARCH.md`：Riot API、OP.GG 與歷史資料來源的第一方政策研究。
 - `SECURITY.md`：公開安全邊界。
@@ -309,3 +311,49 @@ Session loop 從 WPF startup 啟動，async iterator、HTTP await、JSON parsing
 - 距離正式發布門檻仍未完成的項目。
 
 不要把「已修一個 bug」等同於「產品已可用」。每次里程碑都要重新從 AGENTS.md 的九個角度審視。
+
+## 15. 2026-08-10 候選打包里程碑
+
+### 已完成的 repository 內機制
+
+- `Directory.Build.props` 是 Assembly、publish、package manifest 與朋友 HTML 的唯一產品版本來源；目前候選版本為 1.1.0。
+- `global.json` 將建置 SDK 固定為 8.0.423 並停用 roll-forward；Windows workflow 使用同一版，manifest 記錄實際 SDK，避免 `8.0.x` 隨 runner 更新而讓成品漂移。
+- `eng/package-config.json` 集中兩檔 ZIP 契約、允許網域、秘密／本機路徑／fixture 身分／PDB／HTML remote resource／Overlay raw-field 掃描規則。
+- `scripts/package.sh` 與 `scripts/package.ps1` 都只啟動同一個跨平台 PackageBuilder，不各自維護一套容易漂移的 publish 或掃描流程。
+- Linux 入口會 restore、執行所有 `net8.0` 測試、cross-build `net8.0-windows` tests，再以 `EnableWindowsTargeting=true` cross-publish WPF；Windows 入口才會實際執行兩類測試，之後以相同參數 publish。
+- PackageBuilder 將實際 EXE SHA-256 注入完全離線的 `先看這裡.html`，ZIP 頂層只接受 `LoL即時表現Overlay.exe` 與 `先看這裡.html`，並輸出 `package-manifest.json` 和 `SHA256SUMS.txt`。
+- `.github/workflows/windows-package.yml` 在 `windows-latest` 呼叫相同 `scripts/package.ps1`，只上傳候選 artifact，不自動合併、tag 或建立正式 Release。
+- 朋友 HTML 按「安全與隱私 → 開始 → 拖曳／鎖定／重設 → 資料意義 → 疑難排解 → 移除」排列；歷史真人資料未啟用時明確顯示 unavailable，OP.GG 只是使用者主動開啟的普通瀏覽器連結。
+
+### 尚不能由 Linux 宣稱通過
+
+- Windows 真實拖曳手感、WPF focus／click-through、系統匣、SmartScreen、DPI／多螢幕與 LoL 全螢幕無邊框。
+- 兩台乾淨 Windows 10／11 使用者環境的下載、解壓、啟動、完整對局生命週期、結束與移除。
+- 未參與開發的朋友只看 HTML 完成所有操作。
+
+因此產物仍標為「候選成品」，不視為穩定 Release；真機門檻通過前不得只靠 1.1.0 名稱或成功 cross-publish 宣稱完成正式發布。
+
+### UX 方案比較與 Linux pipeline 量測
+
+量測環境：Ubuntu 22.04 x64、.NET SDK 8.0.423、Release build。這些數字只代表跨平台純邏輯與既有程式碼路徑的 proxy，不是 WPF frame time、Windows CPU、Dispatcher latency 或真實拖曳手感。
+
+- 互動方案 A：Dot 全區、Compact／Expanded 的非控制背景都使用同一個 5 DIP click-vs-drag gesture；鎖定後整個 Overlay 以透明輸入 window style 停止接收滑鼠，透過快捷鍵／系統匣解除。
+- 互動方案 B：只允許專用 grip 拖曳，其餘背景 click-through。
+- 固定 100 個 headless hit targets（80 背景、10 grip、10 controls）的 Replay 比較：A 有 90 個可拖目標，B 有 10 個；兩者控制項攔截皆為 0。另以 pointer state-machine tests 驗證 5 DIP 內只 click、超過門檻只 drag、lost capture 可復原。因 A 的可發現拖曳範圍為 B 的 9 倍且沒有新增 control interception，候選實作採 A。
+
+固定 1,800 frames（代表每秒一筆、30 分鐘）的更新 proxy：
+
+| 指標 | 修改前程式碼路徑 | 修改後 | 判讀 |
+|---|---:|---:|---|
+| presentation update policy | 1,800 | 30 | 無可見變化 frame 被 keyed diff 丟棄，減少 98.3% |
+| reducer 總耗時 | 不適用（每 frame 直接 render） | 5.917 ms | 1,800 frames 純邏輯總計 |
+| reducer 配置 | 不適用 | 333,624 bytes | 同一固定 corpus |
+| scorer + reducer 總耗時 | 尚無獨立修改前 scorer 基準 | 224.502 ms | 不把它冒充 WPF UI latency |
+| scorer + reducer 配置 | 尚無獨立修改前 scorer 基準 | 55,735,552 bytes | 約 30.96 KB/frame |
+| forced-GC retained growth | 未量測 | 8,096 bytes | 舊 snapshot weak references 僅 1 個仍存活 |
+
+另以真實 wall clock 每秒送入一筆 scorer + reducer frame，連續執行 30.0155 分鐘／1,800 frames；forced GC 後 retained growth 為 313,056 bytes（約 0.30 MB，低於 10 MB 門檻）。這項 soak 驗證純邏輯 pipeline 沒有持續線性成長，但仍不取代 Windows WPF visual、拖曳與真實對局的記憶體觀察。
+
+目前 Linux Release 驗證為跨平台 Core 105／105 與 PackageBuilder policy 20／20 通過；`net8.0-windows` WPF shell 和 Windows integration tests 均以 `EnableWindowsTargeting=true` cross-build、0 warning／0 error。Windows-only tests 尚須由 Windows runner 實際執行。
+
+修改前的 `OverlayWindow.ApplySnapshot()` 對每個 frame 呼叫 `Render()`，Expanded 每次又對最多十名玩家建立 `BitmapImage`；因此相同 1,800-frame corpus 會走 1,800 次 visual-tree rebuild 與最多 18,000 次 decode 路徑。修改後 mode 內 visual tree 長生命週期、同一路徑圖片只在背景 decode 一次；實際 Windows decode count、UI update P95、CPU、GC 與拖曳 frame pacing仍須由 Windows 真機量測，不能用上述 Linux proxy 取代。

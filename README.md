@@ -1,78 +1,85 @@
 # LoL 即時表現 Overlay
 
-Windows 10／11 x64 的低干擾朋友測試版。程式會在選角與遊戲中讀取同一台電腦上由 League Client／遊戲提供的資料，將「這一場目前的相對表現」整理成圓點、精簡資訊條或十人面板。
+Windows 10／11 x64 的低干擾桌面 Overlay。程式唯讀取得同一台電腦上由 League Client／遊戲提供的資料，將「這一場目前的相對表現」整理成圓點、精簡資訊條或十人面板。
 
 這不是 Riot Games 官方程式，也不代表 Riot Games 的認可。
 
-## 下載測試版
+## 目前交付狀態
 
-從 [v1.0.1-test prerelease](https://github.com/weib10/lol-performance-overlay/releases/tag/v1.0.1-test) 下載：
+Repository 目前產生的是**未簽章候選成品**，不是穩定 Release。Linux 能驗證跨平台邏輯、Windows cross-publish、掃描與 ZIP 契約；SmartScreen、WPF 焦點、真實拖曳手感、DPI／多螢幕、系統匣與完整 LoL 對局仍須在 Windows 10／11 真機驗收。
 
-- `LoL-Performance-Overlay-Friend-Test-v1.0.1.zip`
-- 解壓後先開啟 `先看這裡.html`
-- 再執行 `LoL即時表現Overlay.exe`
+目前候選版本：`1.1.0`。這個數字由 [`Directory.Build.props`](Directory.Build.props) 控制；PackageBuilder 會拒絕 README、朋友 HTML、Windows manifest 或 EXE metadata 不一致的產物。
 
-檔案核對：
+執行 `scripts/package.sh`（Linux）或 `scripts/package.ps1`（Windows）後，候選 ZIP 位於：
 
-- ZIP SHA-256：`34335F2ED45D6F134ACD84E81B724149D20AC0F76A0A02C82974729C9D84317B`
-- EXE SHA-256：`A6102D70CD4E4710EDE2311491357C70FC937BB8766F800351C628F58CD5949E`
+```text
+outputs/LoL即時表現Overlay.zip
+```
 
-完整的非技術使用、安全與移除說明也收錄在 [`docs/先看這裡.html`](docs/先看這裡.html)。
+ZIP 解壓後只包含：
 
-後續產品目標、已知 UX／效能問題、Codex 工作方式與正式版發布門檻，請見 [`docs/PRODUCT_HANDOFF.md`](docs/PRODUCT_HANDOFF.md)。Repository 根目錄的 [`AGENTS.md`](AGENTS.md) 會讓後續 Codex 自動依這些原則工作。
+- `LoL即時表現Overlay.exe`
+- `先看這裡.html`
 
-## 安全與隱私設計
+朋友不需要 .NET SDK、命令列、管理員權限、開發者憑證或額外 App。請先閱讀 HTML，再執行 EXE。實際 EXE 與 ZIP SHA-256 由打包工具寫入 `outputs/SHA256SUMS.txt` 與 `outputs/package-manifest.json`；HTML 內的 EXE 雜湊也由同一次打包自動注入，不接受手動複製。
+
+## 安全與隱私
 
 - 不要求 Riot 帳號、密碼或驗證碼。
 - 不注入遊戲、不讀取遊戲記憶體、不模擬輸入，也不修改 LoL 檔案。
-- 本場玩家資料只在記憶體內用於即時計分，不寫入玩家歷史或上傳。
-- 不查歷史戰績，也不還原選角階段原本匿名的玩家。
+- 本場玩家資料只在記憶體內用於即時計分，不寫成玩家歷史或上傳。
+- 不還原選角階段原本匿名的玩家。
 - League Client 的臨時本機通行資訊只存在記憶體。
-- 唯一的外部下載來源是 Riot 的 `https://ddragon.leagueoflegends.com`，用於英雄、物品名稱與圖示。
-- 顯示設定與公開靜態素材快取位於 `%LOCALAPPDATA%\LolPerformanceOverlay`。
-- 「登入 Windows 後常駐」預設關閉，只有使用者主動啟用時才加入目前使用者的啟動項目。
+- 程式對外只從 `https://ddragon.leagueoflegends.com` 下載 Riot 公開英雄／物品素材；OP.GG 只提供使用者主動開啟的普通瀏覽器連結，程式不抓取頁面。
+- 顯示設定與公開素材快取位於 `%LOCALAPPDATA%\LolPerformanceOverlay`。
+- 歷史資料 live provider 目前未啟用；正式 package 不會用 Synthetic provider 冒充真人資料，核心 Overlay 在歷史資料 unavailable／policy-disabled 時仍可使用。
 
-未簽章的個人測試 EXE 可能觸發 SmartScreen。這個專案不宣稱第三方工具零風險；不接受非官方工具風險的人不應執行。
+未簽章 EXE 可能觸發 SmartScreen。第三方工具無法誠實宣稱零風險；不接受這項不確定性的人不應執行。完整邊界與回報方式見 [`SECURITY.md`](SECURITY.md)。
 
-## 顯示模式
+## 操作
 
-- `Dot`：遊戲開始時預設縮成圓點；綠／灰／紅代表我方領先、接近或落後。
-- `Compact`：顯示雙方平均、分差及目前最高／最低表現英雄。
-- `Expanded`：顯示十名玩家的英雄、本場分數、狀態與信心。
-- 預設快捷鍵：`Ctrl+Shift+O`；若被占用會改用 `Ctrl+Shift+F9`。
+- `Dot`：圓點任何位置都能按住拖曳；沒有超過移動門檻的短按才切換模式，拖曳不會同時觸發 click。
+- `Compact`／`Expanded`：按鈕以外的大部分背景可拖曳。
+- 「鎖定位置」開啟後，整個 Overlay 不接收滑鼠，避免攔截遊戲操作；以快捷鍵或系統匣切換顯示、解除鎖定或重設到可見螢幕範圍。
+- 預設快捷鍵是 `Ctrl+Shift+O`；若被占用，設定會顯示實際可用組合。
 
-分數只描述目前這場的相對表現，不是牌位、長期實力或勝率預測。
+分數只描述目前這一場的相對表現，不是官方牌位、長期實力、隱藏 MMR／ELO 或勝率預測。歷史近期狀態若未來啟用，必須與本場分數分開，並顯示來源、queue／mode、樣本數、取得時間和信心。
 
-## 建置與測試
+## 一鍵建置、測試與打包
 
-需求：.NET 8 SDK、Windows x64。
+需求：`global.json` 鎖定的官方 .NET SDK 8.0.423。Linux 可 cross-publish Windows x64 並 cross-build Windows-only tests；Windows CI 會實際執行這些 Windows-only tests。
 
-```powershell
-dotnet test tests/LolPerformanceOverlay.Tests/LolPerformanceOverlay.Tests.csproj -c Release -warnaserror
+Linux：
 
-dotnet publish src/LolPerformanceOverlay/LolPerformanceOverlay.csproj `
-  -c Release `
-  -r win-x64 `
-  --self-contained true `
-  -p:PublishSingleFile=true `
-  -p:EnableCompressionInSingleFile=true
+```bash
+./scripts/package.sh
 ```
 
-目前測試涵蓋評分模板、百分位與信心、解析容錯、匿名選角、安全 Snapshot 邊界及快捷鍵解析。
+Windows PowerShell：
+
+```powershell
+./scripts/package.ps1
+```
+
+兩個入口都呼叫 [`eng/PackageBuilder`](eng/PackageBuilder)，依序完成 restore、可在該作業系統執行的測試、win-x64 自包含壓縮單檔 publish、離線 HTML、SHA-256、秘密／本機路徑／PDB／資料邊界／網域掃描，以及兩檔 ZIP 驗證。版本唯一來源是 [`Directory.Build.props`](Directory.Build.props)，檔名、allowlist 與掃描規則集中在 [`eng/package-config.json`](eng/package-config.json)。
+
+GitHub Actions 的 [`windows-package.yml`](.github/workflows/windows-package.yml) 在 `windows-latest` 使用同一個 `scripts/package.ps1`，成功後上傳候選 ZIP、manifest 與 hashes；workflow 不會自動合併或建立正式 Release。
 
 ## 資料流
 
 ```text
 League Client／遊戲
-  → 127.0.0.1 本機唯讀資料
-  → 記憶體內計分與平滑
-  → OverlaySnapshot（不含原始 KDA、等級、CS、死亡時間）
-  → WPF Overlay
+  → 本機唯讀資料
+  → 背景解析、評分、去重與節流
+  → OverlaySnapshot（不含原始 KDA、等級、CS、死亡時間或物品價值）
+  → WPF 只更新可見變化
 
 Riot 靜態素材服務
   → 英雄／物品資料與圖示
   → 本機快取
 ```
+
+產品門檻、量測基準與仍待真機驗收項目見 [`docs/PRODUCT_HANDOFF.md`](docs/PRODUCT_HANDOFF.md)；歷史資料政策與來源取捨見 [`docs/HISTORICAL_DATA_RESEARCH.md`](docs/HISTORICAL_DATA_RESEARCH.md)。
 
 ## 免責聲明
 

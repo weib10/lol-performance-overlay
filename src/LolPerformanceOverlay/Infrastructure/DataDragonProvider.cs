@@ -2,19 +2,22 @@ using System.Collections.Concurrent;
 using System.IO;
 using System.Net.Http;
 using System.Text.Json;
+using System.Reflection;
 using LolPerformanceOverlay.Core;
 
 namespace LolPerformanceOverlay.Infrastructure;
 
 public sealed class DataDragonProvider : IStaticGameDataProvider, IDisposable
 {
-    private const string VersionsUrl = "https://ddragon.leagueoflegends.com/api/versions.json";
+    private static readonly Uri VersionsUrl = DataDragonUri("api/versions.json");
     private readonly string _cacheDirectory;
     private readonly HttpClient _httpClient;
     private readonly ConcurrentDictionary<string, ChampionDescriptor> _championsByName =
         new(StringComparer.OrdinalIgnoreCase);
     private readonly ConcurrentDictionary<int, ChampionDescriptor> _championsById = new();
     private readonly ConcurrentDictionary<int, int> _itemGold = new();
+    private readonly ConcurrentDictionary<string, byte> _validatedIconPaths =
+        new(StringComparer.OrdinalIgnoreCase);
     private string? _version;
 
     public DataDragonProvider()
@@ -27,7 +30,11 @@ public sealed class DataDragonProvider : IStaticGameDataProvider, IDisposable
         {
             Timeout = TimeSpan.FromSeconds(10)
         };
-        _httpClient.DefaultRequestHeaders.UserAgent.ParseAdd("LolPerformanceOverlay/1.0");
+        var productVersion = typeof(DataDragonProvider).Assembly
+            .GetCustomAttribute<AssemblyInformationalVersionAttribute>()?
+            .InformationalVersion
+            .Split('+', 2)[0] ?? "0.0.0";
+        _httpClient.DefaultRequestHeaders.UserAgent.ParseAdd($"LolPerformanceOverlay/{productVersion}");
     }
 
     public async Task InitializeAsync(CancellationToken cancellationToken)
@@ -39,19 +46,38 @@ public sealed class DataDragonProvider : IStaticGameDataProvider, IDisposable
 
         string? championJson = null;
         string? itemJson = null;
+        string? cachedVersion = null;
+        var cacheLoaded = false;
         if (File.Exists(cacheChampionPath) && File.Exists(cacheItemPath))
         {
-            championJson = await File.ReadAllTextAsync(cacheChampionPath, cancellationToken);
-            itemJson = await File.ReadAllTextAsync(cacheItemPath, cancellationToken);
-            _version = File.Exists(cacheVersionPath)
-                ? (await File.ReadAllTextAsync(cacheVersionPath, cancellationToken)).Trim()
-                : null;
-            ParseChampions(championJson);
-            ParseItems(itemJson);
-
-            if (File.GetLastWriteTimeUtc(cacheChampionPath) >= DateTime.UtcNow.AddHours(-24))
+            try
             {
-                return;
+                championJson = await File.ReadAllTextAsync(cacheChampionPath, cancellationToken);
+                itemJson = await File.ReadAllTextAsync(cacheItemPath, cancellationToken);
+                _version = File.Exists(cacheVersionPath)
+                    ? (await File.ReadAllTextAsync(cacheVersionPath, cancellationToken)).Trim()
+                    : null;
+                cachedVersion = _version;
+                StaticDataPayloadValidator.RequireDataObject(championJson, "champion cache");
+                StaticDataPayloadValidator.RequireDataObject(itemJson, "item cache");
+                ReplaceParsedData(championJson, itemJson);
+                cacheLoaded = true;
+
+                if (File.GetLastWriteTimeUtc(cacheChampionPath) >= DateTime.UtcNow.AddHours(-24))
+                {
+                    return;
+                }
+            }
+            catch (OperationCanceledException) when (cancellationToken.IsCancellationRequested)
+            {
+                throw;
+            }
+            catch
+            {
+                championJson = null;
+                itemJson = null;
+                _version = null;
+                ClearParsedData();
             }
         }
 
@@ -64,30 +90,32 @@ public sealed class DataDragonProvider : IStaticGameDataProvider, IDisposable
                 throw new InvalidDataException("Data Dragon did not return a patch version.");
             }
 
-            championJson = await _httpClient.GetStringAsync(
-                $"https://ddragon.leagueoflegends.com/cdn/{_version}/data/zh_TW/champion.json",
-                cancellationToken);
-            itemJson = await _httpClient.GetStringAsync(
-                $"https://ddragon.leagueoflegends.com/cdn/{_version}/data/zh_TW/item.json",
-                cancellationToken);
+            var downloadedChampionJson = await _httpClient.GetStringAsync(
+                DataDragonUri($"cdn/{_version}/data/zh_TW/champion.json"), cancellationToken);
+            var downloadedItemJson = await _httpClient.GetStringAsync(
+                DataDragonUri($"cdn/{_version}/data/zh_TW/item.json"), cancellationToken);
+            StaticDataPayloadValidator.RequireDataObject(downloadedChampionJson, "champion response");
+            StaticDataPayloadValidator.RequireDataObject(downloadedItemJson, "item response");
+            ReplaceParsedData(downloadedChampionJson, downloadedItemJson);
+            championJson = downloadedChampionJson;
+            itemJson = downloadedItemJson;
 
-            await File.WriteAllTextAsync(cacheChampionPath, championJson, cancellationToken);
-            await File.WriteAllTextAsync(cacheItemPath, itemJson, cancellationToken);
-            await File.WriteAllTextAsync(cacheVersionPath, _version, cancellationToken);
+            await AtomicFile.WriteAllTextAsync(cacheChampionPath, championJson, cancellationToken);
+            await AtomicFile.WriteAllTextAsync(cacheItemPath, itemJson, cancellationToken);
+            await AtomicFile.WriteAllTextAsync(cacheVersionPath, _version, cancellationToken);
         }
         catch when (!cancellationToken.IsCancellationRequested)
         {
-            // Already loaded cached data above when available.
+            // A valid cache remains usable; malformed or unavailable network data never replaces it.
+            if (cacheLoaded)
+            {
+                _version = cachedVersion;
+            }
         }
 
-        if (!string.IsNullOrWhiteSpace(championJson))
+        if (!cacheLoaded && (string.IsNullOrWhiteSpace(championJson) || string.IsNullOrWhiteSpace(itemJson)))
         {
-            ParseChampions(championJson);
-        }
-
-        if (!string.IsNullOrWhiteSpace(itemJson))
-        {
-            ParseItems(itemJson);
+            ClearParsedData();
         }
     }
 
@@ -123,10 +151,18 @@ public sealed class DataDragonProvider : IStaticGameDataProvider, IDisposable
         }
 
         var filePath = Path.Combine(_cacheDirectory, "icons", $"{champion.Key}.png");
-        if (File.Exists(filePath))
+        if (_validatedIconPaths.ContainsKey(filePath) && File.Exists(filePath))
         {
             return filePath;
         }
+
+        if (File.Exists(filePath) && await IsCompletePngAsync(filePath, cancellationToken))
+        {
+            _validatedIconPaths[filePath] = 0;
+            return filePath;
+        }
+
+        _validatedIconPaths.TryRemove(filePath, out _);
 
         if (string.IsNullOrWhiteSpace(_version))
         {
@@ -137,9 +173,14 @@ public sealed class DataDragonProvider : IStaticGameDataProvider, IDisposable
         {
             Directory.CreateDirectory(Path.GetDirectoryName(filePath)!);
             var bytes = await _httpClient.GetByteArrayAsync(
-                $"https://ddragon.leagueoflegends.com/cdn/{_version}/img/champion/{champion.Key}.png",
-                cancellationToken);
-            await File.WriteAllBytesAsync(filePath, bytes, cancellationToken);
+                DataDragonUri($"cdn/{_version}/img/champion/{champion.Key}.png"), cancellationToken);
+            if (!PngPayloadValidator.IsComplete(bytes))
+            {
+                return null;
+            }
+
+            await AtomicFile.WriteAllBytesAsync(filePath, bytes, cancellationToken);
+            _validatedIconPaths[filePath] = 0;
             return filePath;
         }
         catch when (!cancellationToken.IsCancellationRequested)
@@ -150,7 +191,64 @@ public sealed class DataDragonProvider : IStaticGameDataProvider, IDisposable
 
     public void Dispose() => _httpClient.Dispose();
 
-    private void ParseChampions(string json)
+    private void ReplaceParsedData(string championJson, string itemJson)
+    {
+        var championsByName = new Dictionary<string, ChampionDescriptor>(StringComparer.OrdinalIgnoreCase);
+        var championsById = new Dictionary<int, ChampionDescriptor>();
+        var itemGold = new Dictionary<int, int>();
+        ParseChampions(championJson, championsByName, championsById);
+        ParseItems(itemJson, itemGold);
+
+        ClearParsedData();
+        foreach (var entry in championsByName)
+        {
+            _championsByName[entry.Key] = entry.Value;
+        }
+
+        foreach (var entry in championsById)
+        {
+            _championsById[entry.Key] = entry.Value;
+        }
+
+        foreach (var entry in itemGold)
+        {
+            _itemGold[entry.Key] = entry.Value;
+        }
+    }
+
+    private void ClearParsedData()
+    {
+        _championsByName.Clear();
+        _championsById.Clear();
+        _itemGold.Clear();
+    }
+
+    private static Uri DataDragonUri(string relativePath) =>
+        NetworkDestinationPolicy.RequireAllowed(
+            new Uri(new Uri("https://ddragon.leagueoflegends.com/"), relativePath),
+            NetworkDestinationPurpose.RuntimeData);
+
+    private static async Task<bool> IsCompletePngAsync(string path, CancellationToken cancellationToken)
+    {
+        try
+        {
+            var bytes = await File.ReadAllBytesAsync(path, cancellationToken);
+            return PngPayloadValidator.IsComplete(bytes);
+        }
+        catch (OperationCanceledException) when (cancellationToken.IsCancellationRequested)
+        {
+            throw;
+        }
+        catch
+        {
+            return false;
+        }
+    }
+
+    private static void ParseChampions(
+        string json,
+        IDictionary<string, ChampionDescriptor> championsByName,
+        IDictionary<int, ChampionDescriptor> championsById)
     {
         using var document = JsonDocument.Parse(json);
         if (!document.RootElement.TryGetProperty("data", out var data))
@@ -177,14 +275,14 @@ public sealed class DataDragonProvider : IStaticGameDataProvider, IDisposable
                 name,
                 tags.Length == 0 ? [ChampionArchetype.Fighter] : tags);
 
-            _championsById[id] = descriptor;
-            _championsByName[NormalizeChampionKey(key)] = descriptor;
-            _championsByName[NormalizeChampionKey(name)] = descriptor;
-            _championsByName[NormalizeChampionKey(property.Name)] = descriptor;
+            championsById[id] = descriptor;
+            championsByName[NormalizeChampionKey(key)] = descriptor;
+            championsByName[NormalizeChampionKey(name)] = descriptor;
+            championsByName[NormalizeChampionKey(property.Name)] = descriptor;
         }
     }
 
-    private void ParseItems(string json)
+    private static void ParseItems(string json, IDictionary<int, int> itemGold)
     {
         using var document = JsonDocument.Parse(json);
         if (!document.RootElement.TryGetProperty("data", out var data))
@@ -212,7 +310,7 @@ public sealed class DataDragonProvider : IStaticGameDataProvider, IDisposable
                         totalElement.TryGetInt32(out var parsedTotal)
                 ? parsedTotal
                 : 0;
-            _itemGold[itemId] = excluded ? 0 : Math.Max(total, 0);
+            itemGold[itemId] = excluded ? 0 : Math.Max(total, 0);
         }
     }
 

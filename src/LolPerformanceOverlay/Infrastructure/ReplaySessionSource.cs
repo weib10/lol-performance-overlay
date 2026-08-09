@@ -51,7 +51,8 @@ public sealed class ReplaySessionSource : IReplaySource
                 "測試玩家01#TEST",
                 Array.Empty<ChampSelectMember>(),
                 Array.Empty<RawPlayerState>(),
-                "Replay 完成");
+                "Replay 完成",
+                "tw2");
             await Task.Delay(TimeSpan.FromSeconds(2), cancellationToken);
         } while (_loop && !cancellationToken.IsCancellationRequested);
     }
@@ -87,7 +88,8 @@ public sealed class ReplaySessionSource : IReplaySource
             "測試玩家01#TEST",
             members,
             Array.Empty<RawPlayerState>(),
-            "離線 Replay");
+            "離線 Replay",
+            "tw2");
     }
 
     private async Task<LeagueSessionFrame> LiveFrameAsync(
@@ -127,7 +129,8 @@ public sealed class ReplaySessionSource : IReplaySource
             "測試玩家01#TEST",
             Array.Empty<ChampSelectMember>(),
             players,
-            "離線 Replay");
+            "離線 Replay",
+            "tw2");
     }
 
     private static IReadOnlyList<ReplayPlayerSpec> Roster() =>

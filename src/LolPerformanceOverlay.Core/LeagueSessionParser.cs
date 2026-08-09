@@ -1,7 +1,5 @@
 using System.Text.Json;
-using LolPerformanceOverlay.Core;
-
-namespace LolPerformanceOverlay.Infrastructure;
+namespace LolPerformanceOverlay.Core;
 
 internal static class LeagueSessionParser
 {

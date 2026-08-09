@@ -15,6 +15,8 @@ public sealed class LeagueSessionSource : ILeagueSessionSource
     private readonly HttpClient _liveClient;
     private HttpClient? _lcuClient;
     private LeagueClientCredentials? _credentials;
+    private string? _platformRegion;
+    private DateTimeOffset _nextRegionLookupAt;
 
     public LeagueSessionSource(IStaticGameDataProvider staticData)
     {
@@ -39,6 +41,7 @@ public sealed class LeagueSessionSource : ILeagueSessionSource
                 }
                 else
                 {
+                    await EnsurePlatformRegionAsync(cancellationToken);
                     var phaseText = await GetStringAsync(_lcuClient!, "lol-gameflow/v1/gameflow-phase", cancellationToken);
                     var phase = MapPhase(TrimJsonString(phaseText));
                     lastKnownPhase = phase;
@@ -142,7 +145,8 @@ public sealed class LeagueSessionSource : ILeagueSessionSource
             0,
             activeRiotId,
             members,
-            Array.Empty<RawPlayerState>());
+            Array.Empty<RawPlayerState>(),
+            PlatformRegion: _platformRegion);
     }
 
     private async Task<LeagueSessionFrame> ReadLiveGameAsync(
@@ -220,7 +224,8 @@ public sealed class LeagueSessionSource : ILeagueSessionSource
             activeRiotId,
             Array.Empty<ChampSelectMember>(),
             players,
-            players.Length > 0 ? null : "等待完整玩家資料");
+            players.Length > 0 ? null : "等待完整玩家資料",
+            _platformRegion);
     }
 
     private async Task<string?> ResolveRiotIdAsync(string puuid, CancellationToken cancellationToken)
@@ -277,6 +282,37 @@ public sealed class LeagueSessionSource : ILeagueSessionSource
         _lcuClient?.Dispose();
         _lcuClient = null;
         _credentials = null;
+        _platformRegion = null;
+        _nextRegionLookupAt = default;
+    }
+
+    private async Task EnsurePlatformRegionAsync(CancellationToken cancellationToken)
+    {
+        var now = DateTimeOffset.UtcNow;
+        if (_platformRegion is not null || _lcuClient is null || now < _nextRegionLookupAt)
+        {
+            return;
+        }
+
+        _nextRegionLookupAt = now.AddSeconds(10);
+        try
+        {
+            var json = await GetStringAsync(_lcuClient, "riotclient/region-locale", cancellationToken);
+            using var document = JsonDocument.Parse(json);
+            _platformRegion = PlatformRegionMapper.TryMap(GetJsonString(document.RootElement, "region"));
+            if (_platformRegion is null)
+            {
+                _nextRegionLookupAt = now.AddMinutes(5);
+            }
+        }
+        catch (OperationCanceledException) when (cancellationToken.IsCancellationRequested)
+        {
+            throw;
+        }
+        catch
+        {
+            // Region-dependent optional history/link features stay unavailable rather than guessing.
+        }
     }
 
     private static HttpClient CreateLoopbackClient()
@@ -293,7 +329,11 @@ public sealed class LeagueSessionSource : ILeagueSessionSource
         string path,
         CancellationToken cancellationToken)
     {
-        using var response = await client.GetAsync(path, cancellationToken);
+        var destination = new Uri(
+            client.BaseAddress ?? throw new InvalidOperationException("HTTP client has no base address."),
+            path);
+        NetworkDestinationPolicy.RequireAllowed(destination, NetworkDestinationPurpose.RuntimeData);
+        using var response = await client.GetAsync(destination, cancellationToken);
         response.EnsureSuccessStatusCode();
         return await response.Content.ReadAsStringAsync(cancellationToken);
     }

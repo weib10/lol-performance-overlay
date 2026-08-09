@@ -1,0 +1,100 @@
+{
+  "schemaVersion": 1,
+  "product": {
+    "displayName": "LoL 即時表現 Overlay",
+    "executableFileName": "LoL即時表現Overlay.exe",
+    "friendGuideFileName": "先看這裡.html",
+    "archiveFileName": "LoL即時表現Overlay.zip",
+    "versionPropertiesPath": "Directory.Build.props",
+    "versionPlaceholder": "{{PRODUCT_VERSION}}",
+    "executableHashPlaceholder": "{{EXE_SHA256}}"
+  },
+  "paths": {
+    "windowsProject": "src/LolPerformanceOverlay/LolPerformanceOverlay.csproj",
+    "applicationManifest": "src/LolPerformanceOverlay/app.manifest",
+    "testRoot": "tests",
+    "readme": "README.md",
+    "windowsWorkflow": ".github/workflows/windows-package.yml",
+    "friendGuideTemplate": "docs/先看這裡.html",
+    "workDirectory": "artifacts/package",
+    "outputDirectory": "outputs"
+  },
+  "network": {
+    "runtimeHosts": [
+      "127.0.0.1",
+      "localhost",
+      "ddragon.leagueoflegends.com"
+    ],
+    "userInitiatedBrowserHosts": [
+      "op.gg"
+    ],
+    "documentationHosts": [
+      "developer.riotgames.com",
+      "support-developer.riotgames.com",
+      "github.com",
+      "help.op.gg",
+      "op.gg"
+    ],
+    "nonFetchingMarkupNamespaceHosts": [
+      "schemas.microsoft.com"
+    ]
+  },
+  "scan": {
+    "excludedDirectories": [
+      ".git",
+      ".vs",
+      "artifacts",
+      "bin",
+      "obj",
+      "outputs"
+    ],
+    "secretRegexes": [
+      "RGAPI-[A-Za-z0-9_-]{20,}",
+      "-----BEGIN (?:RSA |EC |OPENSSH )?PRIVATE KEY-----",
+      "(?i)(?:api[_-]?key|password|secret|cookie|session[_-]?token)\\s*[:=]\\s*[\\\"'][^\\\"'{}$<\\r\\n]{8,}[\\\"']",
+      "--remoting-auth-token=(?![<{])[A-Za-z0-9_+/=-]{8,}",
+      "(?i)LeagueClient(?:Ux|UxRender)?:[0-9]+:[0-9]+:[^:\\s]{8,}:https?"
+    ],
+    "developerPathRegexes": [
+      "(?i)[A-Z]:\\\\Users\\\\[^\\\\\"'\\r\\n]+",
+      "/home/[^/\\s]+/",
+      "/Users/[^/\\s]+/"
+    ],
+    "rawOverlayFieldNames": [
+      "Kills",
+      "Deaths",
+      "Assists",
+      "Kda",
+      "Level",
+      "CreepScore",
+      "Cs",
+      "Respawn",
+      "DeathTimer",
+      "ItemGold",
+      "GoldValue",
+      "Items"
+    ],
+    "syntheticGameNamePrefixes": [
+      "Synthetic",
+      "Example",
+      "Fixture",
+      "Player ",
+      "測試",
+      "範例"
+    ],
+    "syntheticTagLines": [
+      "TEST",
+      "SAFE",
+      "SYNTHETIC"
+    ],
+    "syntheticIdentityFactoryFiles": [
+      "tests/LolPerformanceOverlay.Tests/HistoricalTestData.cs",
+      "tests/LolPerformanceOverlay.Tests/HistoricalModelsTests.cs"
+    ],
+    "forbiddenArtifactNameTokens": [
+      "Friend Test",
+      "prerelease",
+      "測試版"
+    ]
+  }
+}

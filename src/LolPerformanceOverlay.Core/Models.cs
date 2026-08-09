@@ -77,7 +77,8 @@ public sealed record LeagueSessionFrame(
     string? ActiveRiotId,
     IReadOnlyList<ChampSelectMember> ChampSelectMembers,
     IReadOnlyList<RawPlayerState> LivePlayers,
-    string? StatusMessage = null);
+    string? StatusMessage = null,
+    string? PlatformRegion = null);
 
 public sealed record OverlayPlayer(
     string StableKey,

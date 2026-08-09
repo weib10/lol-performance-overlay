@@ -1,6 +1,7 @@
 using System.Runtime.InteropServices;
 using System.Windows.Input;
 using System.Windows.Interop;
+using LolPerformanceOverlay.Core;
 
 namespace LolPerformanceOverlay.Services;
 
@@ -42,38 +43,15 @@ public sealed class GlobalHotkey : IDisposable
             return false;
         }
 
-        var parts = text.Split('+', StringSplitOptions.RemoveEmptyEntries | StringSplitOptions.TrimEntries);
-        if (parts.Length < 2)
+        if (!HotkeyGestureParser.TryParse(text, out var gesture))
         {
             return false;
         }
 
-        foreach (var modifier in parts[..^1])
-        {
-            switch (modifier.ToUpperInvariant())
-            {
-                case "CTRL":
-                case "CONTROL":
-                    modifiers |= 0x0002;
-                    break;
-                case "SHIFT":
-                    modifiers |= 0x0004;
-                    break;
-                case "ALT":
-                    modifiers |= 0x0001;
-                    break;
-                case "WIN":
-                case "WINDOWS":
-                    modifiers |= 0x0008;
-                    break;
-                default:
-                    return false;
-            }
-        }
-
         try
         {
-            var key = (Key)new KeyConverter().ConvertFromInvariantString(parts[^1])!;
+            var key = (Key)new KeyConverter().ConvertFromInvariantString(gesture.KeyToken)!;
+            modifiers = (uint)gesture.Modifiers;
             virtualKey = KeyInterop.VirtualKeyFromKey(key);
             return modifiers != 0 && virtualKey != 0;
         }
