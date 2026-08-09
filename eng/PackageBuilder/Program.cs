@@ -956,19 +956,23 @@ internal static class PackageBuilder
     private static void ScanUncompressedProductAssemblies(BuildContext context)
     {
         WriteHeading("Uncompressed product assembly scans");
-        var sourceRoot = ResolveInsideRoot(context.Root, "src");
-        var assemblies = Directory.EnumerateFiles(sourceRoot, "LolPerformanceOverlay*.dll", SearchOption.AllDirectories)
-            .Where(path => Path.GetRelativePath(sourceRoot, path)
-                .Split(Path.DirectorySeparatorChar, Path.AltDirectorySeparatorChar)
-                .Contains("bin", StringComparer.OrdinalIgnoreCase))
-            .Where(path => Path.GetRelativePath(sourceRoot, path)
-                .Split(Path.DirectorySeparatorChar, Path.AltDirectorySeparatorChar)
-                .Contains("Release", StringComparer.OrdinalIgnoreCase))
-            .OrderBy(path => path, StringComparer.Ordinal)
-            .ToArray();
-        if (assemblies.Length == 0)
+        var assemblies = new[]
         {
-            throw new InvalidDataException("No uncompressed Release product assembly was found for content scanning.");
+            ResolveInsideRoot(
+                context.Root,
+                "src/LolPerformanceOverlay.Core/bin/Release/net8.0/LolPerformanceOverlay.Core.dll"),
+            ResolveInsideRoot(
+                context.Root,
+                "src/LolPerformanceOverlay/bin/Release/net8.0-windows/win-x64/LolPerformanceOverlay.dll"),
+            ResolveInsideRoot(
+                context.Root,
+                "src/LolPerformanceOverlay/bin/Release/net8.0-windows/win-x64/LolPerformanceOverlay.Core.dll")
+        };
+        if (assemblies.Any(path => !File.Exists(path)))
+        {
+            throw new InvalidDataException(
+                "A freshly built uncompressed Release product assembly is missing: " +
+                string.Join(", ", assemblies.Where(path => !File.Exists(path))));
         }
 
         var config = context.Config;
@@ -1251,18 +1255,13 @@ internal static class PackageBuilder
 
     private static string FindManagedReleaseAssembly(BuildContext context)
     {
-        var projectDirectory = Path.GetDirectoryName(
-            ResolveInsideRoot(context.Root, context.Config.Paths.WindowsProject))!;
-        var candidates = Directory.EnumerateFiles(
-                Path.Combine(projectDirectory, "bin"),
-                "LolPerformanceOverlay.dll",
-                SearchOption.AllDirectories)
-            .Where(path => path.Split(Path.DirectorySeparatorChar, Path.AltDirectorySeparatorChar)
-                .Contains("Release", StringComparer.OrdinalIgnoreCase))
-            .OrderByDescending(File.GetLastWriteTimeUtc)
-            .ToArray();
-        return candidates.FirstOrDefault() ?? throw new InvalidDataException(
-            "No managed Release application assembly was available for cross-platform metadata validation.");
+        var assembly = ResolveInsideRoot(
+            context.Root,
+            "src/LolPerformanceOverlay/bin/Release/net8.0-windows/win-x64/LolPerformanceOverlay.dll");
+        return File.Exists(assembly)
+            ? assembly
+            : throw new InvalidDataException(
+                "The freshly built managed Release application assembly is missing for metadata validation.");
     }
 
     private static void RequireVersions(
