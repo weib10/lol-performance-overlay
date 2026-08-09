@@ -19,6 +19,8 @@ Windows 10／11 x64 的低干擾朋友測試版。程式會在選角與遊戲中
 
 完整的非技術使用、安全與移除說明也收錄在 [`docs/先看這裡.html`](docs/先看這裡.html)。
 
+後續產品目標、已知 UX／效能問題、Codex 工作方式與正式版發布門檻，請見 [`docs/PRODUCT_HANDOFF.md`](docs/PRODUCT_HANDOFF.md)。Repository 根目錄的 [`AGENTS.md`](AGENTS.md) 會讓後續 Codex 自動依這些原則工作。
+
 ## 安全與隱私設計
 
 - 不要求 Riot 帳號、密碼或驗證碼。
