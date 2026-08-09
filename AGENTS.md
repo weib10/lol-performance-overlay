@@ -22,12 +22,12 @@
 1. **使用體驗**：第一次啟動是否容易理解；所有模式是否容易拖曳、切換、找回、關閉；互動目標是否夠大；是否有 click-through 或焦點陷阱。
 2. **效能**：UI 執行緒是否做網路、解析、圖片解碼或整棵重建；無變化資料是否造成重繪；CPU、記憶體、GC、更新延遲及拖曳順暢度是否合理。
 3. **可靠性**：LoL 未啟動、Client 重啟、2999 暫時失效、缺欄位、離線、對局結束、多螢幕和設定損壞時能否自行恢復。
-4. **安全與隱私**：不洩漏本機憑證、真實測試帳號、原始 KDA 等禁止欄位；不增加遙測、注入、記憶體讀取或玩家歷史。
+4. **安全與隱私**：不洩漏本機憑證、真實測試帳號、原始 KDA 等禁止欄位；歷史資料必須有合法來源、最小保存範圍、清楚快取期限和可關閉／失效降級設計。
 5. **相容性**：Windows 10／11 x64、不同 DPI、解析度、多螢幕、全螢幕無邊框及快捷鍵衝突。
 6. **可理解性與無障礙**：不能只靠顏色；提示與狀態詞要白話；朋友文件不得要求理解 LCU、2999、PUUID 等開發術語。
 7. **打包與維運**：乾淨環境能否一鍵建置；版本、雜湊、文件和 Release 是否一致；ZIP 是否只有應有檔案；能否重現同一個成品。
 8. **可維護性與測試性**：用小的 interface 隱藏複雜 implementation；把真正會變化的行為放在 seam 後；測試 observable outcome，不測內部細節。
-9. **產品誠實性**：分數只描述本場相對表現，不宣稱勝率或長期實力；第三方工具風險與未簽章狀態必須如實說明。
+9. **產品誠實性**：本場表現、歷史近期狀態、官方牌位和推測的風格必須分開呈現；不可把自製指標冒充官方 MMR／ELO、勝率預測或確定的玩家實力。第三方資料來源、樣本數、新鮮度、信心與未簽章狀態必須如實說明。
 
 若一項修改同時影響多個角度，不得只驗證最明顯的那一個。
 
@@ -40,8 +40,18 @@
 - 優先保留 `ILeagueSessionSource`、`IStaticGameDataProvider`、`IPerformanceScorer`、`OverlaySnapshot` 的安全資料邊界。若要改 interface，先說明能增加什麼 leverage、locality 或 testability。
 - Fixtures、測試、截圖、log 和 Issue 不得包含真實 Riot ID、LCU token 或開發者本機路徑。
 - 不把原始 KDA、等級、CS、死亡時間或物品價值加入 `OverlaySnapshot` 或 UI view model。
-- 不引入 OP.GG、歷史戰績、匿名身分還原、遊戲注入或自動輸入。
+- 可以研究並使用官方 Riot API、OP.GG 公開頁面或其他歷史資料，但必須遵守下方的「歷史資料來源規則」；匿名身分還原、遊戲注入和自動輸入仍然禁止。
 - 不因功能困難而靜默縮小範圍；若必須調整產品承諾，要在文件中清楚記錄原因。
+
+## 歷史資料來源規則
+
+- 歷史資料的產品目的，是描述可見玩家的近期表現、常用英雄／位置與風格；不得分析 Riot 刻意隱藏的玩家，也不得建立自製 MMR／ELO 或替代官方天梯。
+- 建立小而明確的歷史資料 interface，至少要有 `Synthetic` 測試 adapter、正式 live adapter 和 unavailable／failure fallback。假資料可完整驗證 UI、評分、極端值與樣本不足，但正式 package 不得把假資料冒充真人資料。
+- 歷史 profile 至少包含來源、取得時間、queue／mode、樣本數與信心。UI 必須把「本場即時表現」和「歷史近期狀態／風格」分開，不能混成一個無法解釋的總分。
+- Riot API key 不得寫入原始碼、設定範例、log、fixture、EXE 或 ZIP。公開散布若依賴 Riot API，必須使用符合 Riot 規則的 Production Key 架構；不能把 development／personal key 藏進朋友版。
+- OP.GG 只能透過有明確允許依據的公開資料方式使用；不得依賴未公開私有端點、繞過存取控制或高頻抓取。必須標註來源、限制頻率、加快取，並在 OP.GG 失效時讓核心 Overlay 正常運作。
+- OP.GG 的 Help Center 與網站條款對 scraping 存在文字衝突；在取得較明確授權前，不能把 scraping 當成唯一正式資料來源。詳見 `docs/HISTORICAL_DATA_RESEARCH.md`。
+- 新資料來源要有 schema／fixture、timeout、cancellation、rate-limit、cache、stale-data 和 malformed-response 測試，且任何網路工作不得阻塞 UI thread。
 
 ## 每次 UX／效能修改的最低驗證
 
