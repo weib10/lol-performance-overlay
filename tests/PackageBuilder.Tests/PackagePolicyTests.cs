@@ -350,6 +350,37 @@ public sealed class PackagePolicyTests
     }
 
     [Fact]
+    public void BinaryNoiseShapedLikeARiotIdDoesNotFailTheRelease()
+    {
+        // The exact run a compiled Core assembly produced when unrelated metadata shifted:
+        // a quote byte, '{', NUL, '#', '8', 'a', then another quote byte.
+        var noise = string.Concat("{", "\0", "#", "8a");
+        var noiseViolations = new HashSet<string>(StringComparer.Ordinal);
+
+        PackageBuilder.ValidateSyntheticRiotIds(
+            noiseViolations,
+            "src/LolPerformanceOverlay.Core/bin/Release/net8.0/LolPerformanceOverlay.Core.dll",
+            $"\"{noise}\"",
+            ["Synthetic", "Fixture"],
+            ["TEST", "SAFE", "SYNTHETIC"]);
+
+        Assert.Empty(noiseViolations);
+
+        // A genuine identity in that same assembly must still fail the gate.
+        var realIdentity = string.Concat("Ordinary", "Summoner", "#", "TW2");
+        var realViolations = new HashSet<string>(StringComparer.Ordinal);
+
+        PackageBuilder.ValidateSyntheticRiotIds(
+            realViolations,
+            "src/LolPerformanceOverlay.Core/bin/Release/net8.0/LolPerformanceOverlay.Core.dll",
+            $"\"{realIdentity}\"",
+            ["Synthetic", "Fixture"],
+            ["TEST", "SAFE", "SYNTHETIC"]);
+
+        Assert.Single(realViolations);
+    }
+
+    [Fact]
     public void CSharpEscapedSplitRiotIdentityIsRejected()
     {
         var violations = new HashSet<string>(StringComparer.Ordinal);

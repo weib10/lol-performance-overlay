@@ -581,6 +581,11 @@ internal static class PackageBuilder
         foreach (Match match in regex.Matches(text))
         {
             var candidate = match.Groups[1].Value;
+            if (!IsPlausibleTextLiteral(candidate))
+            {
+                continue;
+            }
+
             if (!IsVisiblySyntheticRiotId(candidate, syntheticGameNamePrefixes, syntheticTagLines))
             {
                 violations.Add(
@@ -598,6 +603,11 @@ internal static class PackageBuilder
         foreach (Match match in splitIdentity.Matches(text))
         {
             var candidate = $"{match.Groups["gameName"].Value}#{match.Groups["tagLine"].Value}";
+            if (!IsPlausibleTextLiteral(candidate))
+            {
+                continue;
+            }
+
             if (!IsVisiblySyntheticRiotId(candidate, syntheticGameNamePrefixes, syntheticTagLines))
             {
                 violations.Add(
@@ -605,6 +615,13 @@ internal static class PackageBuilder
             }
         }
     }
+
+    // Compiled assemblies are scanned as speculative text, so quote and '#' bytes line up into the
+    // Riot-ID shape by chance: an unrelated source edit that shifts metadata can fail the release on
+    // a match like '{',NUL,'#','8','a'. A real Riot ID literal never contains a control character,
+    // so this drops binary noise without relaxing detection of an actual identity.
+    private static bool IsPlausibleTextLiteral(string candidate) =>
+        !string.IsNullOrEmpty(candidate) && !candidate.Any(char.IsControl);
 
     private static bool IsVisiblySyntheticRiotId(
         string candidate,
