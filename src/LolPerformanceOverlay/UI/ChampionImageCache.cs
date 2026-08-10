@@ -60,11 +60,13 @@ internal sealed class ChampionImageCache
 
         try
         {
+            var bytes = File.ReadAllBytes(path);
+            using var stream = new MemoryStream(bytes, writable: false);
             var bitmap = new BitmapImage();
             bitmap.BeginInit();
             bitmap.CacheOption = BitmapCacheOption.OnLoad;
             bitmap.CreateOptions = BitmapCreateOptions.IgnoreImageCache;
-            bitmap.UriSource = new Uri(path, UriKind.Absolute);
+            bitmap.StreamSource = stream;
             bitmap.EndInit();
             bitmap.Freeze();
             Interlocked.Increment(ref _decodeCount);
