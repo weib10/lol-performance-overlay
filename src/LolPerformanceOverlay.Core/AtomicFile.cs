@@ -8,6 +8,11 @@ namespace LolPerformanceOverlay.Core;
 /// </summary>
 public static class AtomicFile
 {
+    // Windows does not guarantee that concurrent overwrite moves to the same destination can all
+    // succeed. Writes are infrequent (settings and static cache files), so one process-wide gate is
+    // simpler and strictly bounded compared with a per-path semaphore dictionary.
+    private static readonly SemaphoreSlim ReplacementGate = new(1, 1);
+
     public static async Task WriteAllTextAsync(
         string path,
         string contents,
@@ -16,33 +21,34 @@ public static class AtomicFile
         ArgumentException.ThrowIfNullOrWhiteSpace(path);
         ArgumentNullException.ThrowIfNull(contents);
 
-        var fullPath = Path.GetFullPath(path);
-        var directory = Path.GetDirectoryName(fullPath)
-            ?? throw new ArgumentException("The destination must have a parent directory.", nameof(path));
-        Directory.CreateDirectory(directory);
-        var temporaryPath = Path.Combine(
-            directory,
-            $".{Path.GetFileName(fullPath)}.{Guid.NewGuid():N}.tmp");
+        await ReplacementGate.WaitAsync(cancellationToken).ConfigureAwait(false);
         try
         {
-            await File.WriteAllTextAsync(
-                temporaryPath,
-                contents,
-                new UTF8Encoding(encoderShouldEmitUTF8Identifier: false),
-                cancellationToken).ConfigureAwait(false);
-            cancellationToken.ThrowIfCancellationRequested();
-            File.Move(temporaryPath, fullPath, overwrite: true);
+            var fullPath = Path.GetFullPath(path);
+            var directory = Path.GetDirectoryName(fullPath)
+                ?? throw new ArgumentException("The destination must have a parent directory.", nameof(path));
+            Directory.CreateDirectory(directory);
+            var temporaryPath = Path.Combine(
+                directory,
+                $".{Path.GetFileName(fullPath)}.{Guid.NewGuid():N}.tmp");
+            try
+            {
+                await File.WriteAllTextAsync(
+                    temporaryPath,
+                    contents,
+                    new UTF8Encoding(encoderShouldEmitUTF8Identifier: false),
+                    cancellationToken).ConfigureAwait(false);
+                cancellationToken.ThrowIfCancellationRequested();
+                File.Move(temporaryPath, fullPath, overwrite: true);
+            }
+            finally
+            {
+                TryDeleteTemporary(temporaryPath);
+            }
         }
         finally
         {
-            try
-            {
-                File.Delete(temporaryPath);
-            }
-            catch
-            {
-                // A stale sibling is safer than damaging the last known-good destination.
-            }
+            ReplacementGate.Release();
         }
     }
 
@@ -53,39 +59,52 @@ public static class AtomicFile
     {
         ArgumentException.ThrowIfNullOrWhiteSpace(path);
 
-        var fullPath = Path.GetFullPath(path);
-        var directory = Path.GetDirectoryName(fullPath)
-            ?? throw new ArgumentException("The destination must have a parent directory.", nameof(path));
-        Directory.CreateDirectory(directory);
-        var temporaryPath = Path.Combine(
-            directory,
-            $".{Path.GetFileName(fullPath)}.{Guid.NewGuid():N}.tmp");
+        await ReplacementGate.WaitAsync(cancellationToken).ConfigureAwait(false);
         try
         {
-            await using (var stream = new FileStream(
-                             temporaryPath,
-                             FileMode.CreateNew,
-                             FileAccess.Write,
-                             FileShare.None,
-                             bufferSize: 16 * 1024,
-                             FileOptions.Asynchronous))
+            var fullPath = Path.GetFullPath(path);
+            var directory = Path.GetDirectoryName(fullPath)
+                ?? throw new ArgumentException("The destination must have a parent directory.", nameof(path));
+            Directory.CreateDirectory(directory);
+            var temporaryPath = Path.Combine(
+                directory,
+                $".{Path.GetFileName(fullPath)}.{Guid.NewGuid():N}.tmp");
+            try
             {
-                await stream.WriteAsync(contents, cancellationToken).ConfigureAwait(false);
-                await stream.FlushAsync(cancellationToken).ConfigureAwait(false);
+                await using (var stream = new FileStream(
+                                 temporaryPath,
+                                 FileMode.CreateNew,
+                                 FileAccess.Write,
+                                 FileShare.None,
+                                 bufferSize: 16 * 1024,
+                                 FileOptions.Asynchronous))
+                {
+                    await stream.WriteAsync(contents, cancellationToken).ConfigureAwait(false);
+                    await stream.FlushAsync(cancellationToken).ConfigureAwait(false);
+                }
+                cancellationToken.ThrowIfCancellationRequested();
+                File.Move(temporaryPath, fullPath, overwrite: true);
             }
-            cancellationToken.ThrowIfCancellationRequested();
-            File.Move(temporaryPath, fullPath, overwrite: true);
+            finally
+            {
+                TryDeleteTemporary(temporaryPath);
+            }
         }
         finally
         {
-            try
-            {
-                File.Delete(temporaryPath);
-            }
-            catch
-            {
-                // A stale sibling is safer than damaging the last known-good destination.
-            }
+            ReplacementGate.Release();
+        }
+    }
+
+    private static void TryDeleteTemporary(string path)
+    {
+        try
+        {
+            File.Delete(path);
+        }
+        catch
+        {
+            // A stale sibling is safer than damaging the last known-good destination.
         }
     }
 }
