@@ -10,13 +10,23 @@ namespace LolPerformanceOverlay.Infrastructure;
 
 public sealed class LeagueSessionSource : ILeagueSessionSource
 {
+    private const int MaximumLocalJsonBytes = 2 * 1024 * 1024;
     private readonly IStaticGameDataProvider _staticData;
+    private readonly object _lcuGate = new();
+    private readonly CancellationTokenSource _lifetime = new();
     private readonly ConcurrentDictionary<string, string> _summonerNames = new(StringComparer.Ordinal);
     private readonly HttpClient _liveClient;
     private HttpClient? _lcuClient;
-    private LeagueClientCredentials? _credentials;
     private string? _platformRegion;
     private DateTimeOffset _nextRegionLookupAt;
+    private string? _activeRiotId;
+    private DateTimeOffset _nextActiveIdentityLookupAt;
+    private int _queueId;
+    private DateTimeOffset _nextMatchMetadataLookupAt;
+    private int _activeWatchers;
+    private bool _lifetimeCancellationCompleted;
+    private bool _lifetimeDisposed;
+    private volatile bool _disposed;
 
     public LeagueSessionSource(IStaticGameDataProvider staticData)
     {
@@ -29,121 +39,249 @@ public sealed class LeagueSessionSource : ILeagueSessionSource
     public async IAsyncEnumerable<LeagueSessionFrame> WatchAsync(
         [EnumeratorCancellation] CancellationToken cancellationToken)
     {
-        LeaguePhase lastKnownPhase = LeaguePhase.None;
-        while (!cancellationToken.IsCancellationRequested)
+        if (!TryStartWatcher(out var lifetimeToken))
         {
-            LeagueSessionFrame frame;
-            try
-            {
-                if (!EnsureLcuClient())
-                {
-                    frame = EmptyFrame(LeaguePhase.None, "等待 League Client");
-                }
-                else
-                {
-                    await EnsurePlatformRegionAsync(cancellationToken);
-                    var phaseText = await GetStringAsync(_lcuClient!, "lol-gameflow/v1/gameflow-phase", cancellationToken);
-                    var phase = MapPhase(TrimJsonString(phaseText));
-                    lastKnownPhase = phase;
-                    frame = phase switch
-                    {
-                        LeaguePhase.ChampSelect => await ReadChampSelectAsync(cancellationToken),
-                        LeaguePhase.InGame or LeaguePhase.Loading =>
-                            await ReadLiveGameAsync(phase, cancellationToken),
-                        LeaguePhase.EndOfGame => EmptyFrame(LeaguePhase.EndOfGame, "對局已結束"),
-                        _ => EmptyFrame(phase, PhaseMessage(phase))
-                    };
-                }
-            }
-            catch (OperationCanceledException) when (cancellationToken.IsCancellationRequested)
-            {
-                yield break;
-            }
-            catch
-            {
-                ResetLcuConnection();
-                frame = EmptyFrame(lastKnownPhase, "本機資料暫時不可用，正在重連");
-            }
+            yield break;
+        }
 
-            yield return frame;
-            try
+        try
+        {
+            using var linkedCancellation = CancellationTokenSource.CreateLinkedTokenSource(
+                cancellationToken,
+                lifetimeToken);
+            var watchToken = linkedCancellation.Token;
+            LeaguePhase lastKnownPhase = LeaguePhase.None;
+            while (!watchToken.IsCancellationRequested && !_disposed)
             {
-                var delay = frame.Phase == LeaguePhase.None
-                    ? TimeSpan.FromSeconds(2)
-                    : TimeSpan.FromSeconds(1);
-                await Task.Delay(delay, cancellationToken);
+                LeagueSessionFrame frame;
+                try
+                {
+                    if (!EnsureLcuClient())
+                    {
+                        frame = EmptyFrame(LeaguePhase.None, "等待 League Client");
+                    }
+                    else
+                    {
+                        await EnsurePlatformRegionAsync(watchToken);
+                        var phaseText = await GetStringAsync(_lcuClient!, "lol-gameflow/v1/gameflow-phase", watchToken);
+                        var phase = MapPhase(TrimJsonString(phaseText));
+                        if ((lastKnownPhase == LeaguePhase.ChampSelect && phase != LeaguePhase.ChampSelect) ||
+                            (lastKnownPhase is LeaguePhase.Loading or LeaguePhase.InGame &&
+                             phase is not (LeaguePhase.Loading or LeaguePhase.InGame)))
+                        {
+                            ClearSessionState();
+                        }
+
+                        lastKnownPhase = phase;
+                        frame = phase switch
+                        {
+                            LeaguePhase.ChampSelect => await ReadChampSelectAsync(watchToken),
+                            LeaguePhase.InGame or LeaguePhase.Loading =>
+                                await ReadLiveGameAsync(phase, watchToken),
+                            LeaguePhase.EndOfGame => EmptyFrame(LeaguePhase.EndOfGame, "對局已結束"),
+                            _ => EmptyFrame(phase, PhaseMessage(phase))
+                        };
+                    }
+                }
+                catch (OperationCanceledException) when (watchToken.IsCancellationRequested)
+                {
+                    yield break;
+                }
+                catch
+                {
+                    if (_disposed)
+                    {
+                        yield break;
+                    }
+
+                    ResetLcuConnection();
+                    frame = EmptyFrame(lastKnownPhase, "本機資料暫時不可用，正在重連");
+                }
+
+                if (_disposed || watchToken.IsCancellationRequested)
+                {
+                    yield break;
+                }
+
+                yield return frame;
+                try
+                {
+                    var delay = frame.Phase == LeaguePhase.None
+                        ? TimeSpan.FromSeconds(2)
+                        : TimeSpan.FromSeconds(1);
+                    await Task.Delay(delay, watchToken);
+                }
+                catch (OperationCanceledException) when (watchToken.IsCancellationRequested)
+                {
+                    yield break;
+                }
             }
-            catch (OperationCanceledException)
-            {
-                yield break;
-            }
+        }
+        finally
+        {
+            FinishWatcher();
         }
     }
 
     public ValueTask DisposeAsync()
     {
-        _lcuClient?.Dispose();
+        HttpClient? lcuClient;
+        lock (_lcuGate)
+        {
+            if (_disposed)
+            {
+                return ValueTask.CompletedTask;
+            }
+
+            _disposed = true;
+            lcuClient = _lcuClient;
+            _lcuClient = null;
+        }
+
+        _lifetime.Cancel();
+        lcuClient?.Dispose();
         _liveClient.Dispose();
+        ClearSessionState();
+        CompleteLifetimeCancellation();
         return ValueTask.CompletedTask;
+    }
+
+    private bool TryStartWatcher(out CancellationToken lifetimeToken)
+    {
+        lock (_lcuGate)
+        {
+            if (_disposed)
+            {
+                lifetimeToken = default;
+                return false;
+            }
+
+            _activeWatchers++;
+            lifetimeToken = _lifetime.Token;
+            return true;
+        }
+    }
+
+    private void FinishWatcher()
+    {
+        var disposeLifetime = false;
+        lock (_lcuGate)
+        {
+            _activeWatchers--;
+            if (_activeWatchers < 0)
+            {
+                throw new InvalidOperationException("League session watcher count became negative.");
+            }
+
+            if (_disposed && _lifetimeCancellationCompleted &&
+                _activeWatchers == 0 && !_lifetimeDisposed)
+            {
+                _lifetimeDisposed = true;
+                disposeLifetime = true;
+            }
+        }
+
+        if (disposeLifetime)
+        {
+            _lifetime.Dispose();
+        }
+    }
+
+    private void CompleteLifetimeCancellation()
+    {
+        var disposeLifetime = false;
+        lock (_lcuGate)
+        {
+            _lifetimeCancellationCompleted = true;
+            if (_activeWatchers == 0 && !_lifetimeDisposed)
+            {
+                _lifetimeDisposed = true;
+                disposeLifetime = true;
+            }
+        }
+
+        if (disposeLifetime)
+        {
+            _lifetime.Dispose();
+        }
     }
 
     private bool EnsureLcuClient()
     {
-        var discovered = LeagueClientDiscovery.TryDiscover();
-        if (discovered is null)
+        lock (_lcuGate)
         {
-            ResetLcuConnection();
-            return false;
-        }
+            if (_disposed)
+            {
+                return false;
+            }
 
-        if (_credentials == discovered && _lcuClient is not null)
-        {
+            if (_lcuClient is not null)
+            {
+                return true;
+            }
+
+            var discovered = LeagueClientDiscovery.TryDiscover();
+            ResetLcuConnection();
+            if (discovered is null)
+            {
+                return false;
+            }
+
+            _lcuClient = CreateLoopbackClient();
+            _lcuClient.BaseAddress = new Uri($"{discovered.Protocol}://127.0.0.1:{discovered.Port}/");
+            var token = Convert.ToBase64String(Encoding.ASCII.GetBytes($"riot:{discovered.Password}"));
+            _lcuClient.DefaultRequestHeaders.Authorization = new AuthenticationHeaderValue("Basic", token);
+            _lcuClient.Timeout = TimeSpan.FromSeconds(2);
             return true;
         }
-
-        ResetLcuConnection();
-        _credentials = discovered;
-        _lcuClient = CreateLoopbackClient();
-        _lcuClient.BaseAddress = new Uri($"{discovered.Protocol}://127.0.0.1:{discovered.Port}/");
-        var token = Convert.ToBase64String(Encoding.ASCII.GetBytes($"riot:{discovered.Password}"));
-        _lcuClient.DefaultRequestHeaders.Authorization = new AuthenticationHeaderValue("Basic", token);
-        _lcuClient.Timeout = TimeSpan.FromSeconds(2);
-        _summonerNames.Clear();
-        return true;
     }
 
     private async Task<LeagueSessionFrame> ReadChampSelectAsync(CancellationToken cancellationToken)
     {
         var json = await GetStringAsync(_lcuClient!, "lol-champ-select/v1/session", cancellationToken);
         var parsedMembers = LeagueSessionParser.ParseChampSelectMembers(json);
-        var members = await Task.WhenAll(parsedMembers.Select(async member =>
+        var descriptors = new ChampionDescriptor[parsedMembers.Count];
+        var iconRequests = new ValueTask<string?>[parsedMembers.Count];
+        var identityRequests = new ValueTask<string?>[parsedMembers.Count];
+        for (var index = 0; index < parsedMembers.Count; index++)
         {
+            var member = parsedMembers[index];
             var champion = _staticData.ResolveChampion(string.Empty, member.ChampionId);
-            var icon = await _staticData.EnsureChampionIconAsync(champion, cancellationToken);
-            string? riotId = null;
-            if (!member.IsAnonymous && !string.IsNullOrWhiteSpace(member.Puuid))
-            {
-                riotId = await ResolveRiotIdAsync(member.Puuid, cancellationToken);
-            }
+            descriptors[index] = champion;
+            iconRequests[index] = _staticData.EnsureChampionIconAsync(champion, cancellationToken);
+            identityRequests[index] = !member.IsAnonymous && !string.IsNullOrWhiteSpace(member.Puuid)
+                ? ResolveRiotIdAsync(member.Puuid, cancellationToken)
+                : ValueTask.FromResult<string?>(null);
+        }
 
-            return new ChampSelectMember(
+        var members = new ChampSelectMember[parsedMembers.Count];
+        for (var index = 0; index < parsedMembers.Count; index++)
+        {
+            var member = parsedMembers[index];
+            var champion = descriptors[index];
+            members[index] = new ChampSelectMember(
                 member.StableKey,
-                riotId,
+                await identityRequests[index],
                 member.Team,
                 member.ChampionId,
                 member.ChampionId > 0 ? champion.Name : string.Empty,
-                icon,
+                await iconRequests[index],
                 member.IsAnonymous);
-        }));
+        }
 
-        var activeRiotId = await ReadCurrentSummonerRiotIdAsync(cancellationToken);
+        var now = DateTimeOffset.UtcNow;
+        if (string.IsNullOrWhiteSpace(_activeRiotId) && now >= _nextActiveIdentityLookupAt)
+        {
+            _nextActiveIdentityLookupAt = now.AddSeconds(10);
+            _activeRiotId = await ReadCurrentSummonerRiotIdAsync(cancellationToken);
+        }
         return new LeagueSessionFrame(
             LeaguePhase.ChampSelect,
             DateTimeOffset.Now,
             0,
             string.Empty,
             0,
-            activeRiotId,
+            _activeRiotId,
             members,
             Array.Empty<RawPlayerState>(),
             PlatformRegion: _platformRegion);
@@ -157,8 +295,15 @@ public sealed class LeagueSessionSource : ILeagueSessionSource
         string statsJson;
         try
         {
-            playerJson = await GetStringAsync(_liveClient, "liveclientdata/playerlist", cancellationToken);
-            statsJson = await GetStringAsync(_liveClient, "liveclientdata/gamestats", cancellationToken);
+            var playerTask = GetStringAsync(_liveClient, "liveclientdata/playerlist", cancellationToken);
+            var statsTask = GetStringAsync(_liveClient, "liveclientdata/gamestats", cancellationToken);
+            await Task.WhenAll(playerTask, statsTask);
+            playerJson = await playerTask;
+            statsJson = await statsTask;
+        }
+        catch (OperationCanceledException) when (cancellationToken.IsCancellationRequested)
+        {
+            throw;
         }
         catch
         {
@@ -167,23 +312,39 @@ public sealed class LeagueSessionSource : ILeagueSessionSource
 
         var parsedPlayers = LeagueSessionParser.ParseLivePlayers(playerJson);
         var stats = LeagueSessionParser.ParseGameStats(statsJson);
-        var players = await Task.WhenAll(parsedPlayers.Select(async player =>
+        var descriptors = new ChampionDescriptor[parsedPlayers.Count];
+        var iconRequests = new ValueTask<string?>[parsedPlayers.Count];
+        for (var index = 0; index < parsedPlayers.Count; index++)
         {
+            var player = parsedPlayers[index];
             var champion = _staticData.ResolveChampion(player.ChampionName, player.ChampionId);
-            var icon = await _staticData.EnsureChampionIconAsync(champion, cancellationToken);
-            var items = player.Items.Select(item =>
-            {
-                var staticGold = _staticData.GetItemGoldValue(item.ItemId);
-                return new RawItemState(item.ItemId, item.Count, staticGold > 0 ? staticGold : item.ReportedPrice);
-            }).ToArray();
+            descriptors[index] = champion;
+            iconRequests[index] = _staticData.EnsureChampionIconAsync(champion, cancellationToken);
+        }
 
-            return new RawPlayerState(
+        var players = new RawPlayerState[parsedPlayers.Count];
+        for (var index = 0; index < parsedPlayers.Count; index++)
+        {
+            var player = parsedPlayers[index];
+            var champion = descriptors[index];
+            var items = new RawItemState[player.Items.Count];
+            for (var itemIndex = 0; itemIndex < player.Items.Count; itemIndex++)
+            {
+                var item = player.Items[itemIndex];
+                var staticGold = _staticData.GetItemGoldValue(item.ItemId);
+                items[itemIndex] = new RawItemState(
+                    item.ItemId,
+                    item.Count,
+                    staticGold > 0 ? staticGold : item.ReportedPrice);
+            }
+
+            players[index] = new RawPlayerState(
                 $"{player.Team}:{player.RiotId}",
                 player.RiotId,
                 player.Team,
                 champion.Key,
                 champion.Name,
-                icon,
+                await iconRequests[index],
                 champion.Archetypes,
                 player.Kills,
                 player.Deaths,
@@ -191,28 +352,43 @@ public sealed class LeagueSessionSource : ILeagueSessionSource
                 player.CreepScore,
                 player.Level,
                 items);
-        }));
-
-        string? activeRiotId = null;
-        try
-        {
-            var activeJson = await GetStringAsync(_liveClient, "liveclientdata/activeplayer", cancellationToken);
-            activeRiotId = LeagueSessionParser.ParseActiveRiotId(activeJson);
-        }
-        catch
-        {
-            activeRiotId = await ReadCurrentSummonerRiotIdAsync(cancellationToken);
         }
 
-        var queueId = 0;
-        try
+        var now = DateTimeOffset.UtcNow;
+        if (string.IsNullOrWhiteSpace(_activeRiotId) && now >= _nextActiveIdentityLookupAt)
         {
-            var gameflowJson = await GetStringAsync(_lcuClient!, "lol-gameflow/v1/session", cancellationToken);
-            queueId = LeagueSessionParser.ParseQueueId(gameflowJson);
+            _nextActiveIdentityLookupAt = now.AddSeconds(10);
+            try
+            {
+                var activeJson = await GetStringAsync(_liveClient, "liveclientdata/activeplayer", cancellationToken);
+                _activeRiotId = LeagueSessionParser.ParseActiveRiotId(activeJson);
+            }
+            catch (OperationCanceledException) when (cancellationToken.IsCancellationRequested)
+            {
+                throw;
+            }
+            catch
+            {
+                _activeRiotId = await ReadCurrentSummonerRiotIdAsync(cancellationToken);
+            }
         }
-        catch
+
+        if (_queueId == 0 && now >= _nextMatchMetadataLookupAt)
         {
-            // Queue ID only tunes confidence timing; the mode name remains a safe fallback.
+            _nextMatchMetadataLookupAt = now.AddSeconds(10);
+            try
+            {
+                var gameflowJson = await GetStringAsync(_lcuClient!, "lol-gameflow/v1/session", cancellationToken);
+                _queueId = LeagueSessionParser.ParseQueueId(gameflowJson);
+            }
+            catch (OperationCanceledException) when (cancellationToken.IsCancellationRequested)
+            {
+                throw;
+            }
+            catch
+            {
+                // Queue ID only tunes confidence timing; the mode name remains a safe fallback.
+            }
         }
 
         return new LeagueSessionFrame(
@@ -220,21 +396,26 @@ public sealed class LeagueSessionSource : ILeagueSessionSource
             DateTimeOffset.Now,
             stats.GameTimeSeconds,
             stats.GameMode,
-            queueId,
-            activeRiotId,
+            _queueId,
+            _activeRiotId,
             Array.Empty<ChampSelectMember>(),
             players,
             players.Length > 0 ? null : "等待完整玩家資料",
             _platformRegion);
     }
 
-    private async Task<string?> ResolveRiotIdAsync(string puuid, CancellationToken cancellationToken)
+    private ValueTask<string?> ResolveRiotIdAsync(string puuid, CancellationToken cancellationToken)
     {
         if (_summonerNames.TryGetValue(puuid, out var cached))
         {
-            return cached;
+            return ValueTask.FromResult<string?>(cached.Length == 0 ? "已識別玩家" : cached);
         }
 
+        return new ValueTask<string?>(FetchRiotIdAsync(puuid, cancellationToken));
+    }
+
+    private async Task<string?> FetchRiotIdAsync(string puuid, CancellationToken cancellationToken)
+    {
         try
         {
             var json = await GetStringAsync(
@@ -254,8 +435,13 @@ public sealed class LeagueSessionSource : ILeagueSessionSource
 
             return riotId;
         }
+        catch (OperationCanceledException) when (cancellationToken.IsCancellationRequested)
+        {
+            throw;
+        }
         catch
         {
+            _summonerNames[puuid] = string.Empty;
             return "已識別玩家";
         }
     }
@@ -271,6 +457,10 @@ public sealed class LeagueSessionSource : ILeagueSessionSource
             var tag = GetJsonString(root, "tagLine");
             return string.IsNullOrWhiteSpace(tag) ? gameName : $"{gameName}#{tag}";
         }
+        catch (OperationCanceledException) when (cancellationToken.IsCancellationRequested)
+        {
+            throw;
+        }
         catch
         {
             return null;
@@ -279,11 +469,14 @@ public sealed class LeagueSessionSource : ILeagueSessionSource
 
     private void ResetLcuConnection()
     {
-        _lcuClient?.Dispose();
-        _lcuClient = null;
-        _credentials = null;
-        _platformRegion = null;
-        _nextRegionLookupAt = default;
+        lock (_lcuGate)
+        {
+            _lcuClient?.Dispose();
+            _lcuClient = null;
+            _platformRegion = null;
+            _nextRegionLookupAt = default;
+            ClearSessionState();
+        }
     }
 
     private async Task EnsurePlatformRegionAsync(CancellationToken cancellationToken)
@@ -319,7 +512,9 @@ public sealed class LeagueSessionSource : ILeagueSessionSource
     {
         var handler = new HttpClientHandler
         {
-            ServerCertificateCustomValidationCallback = (_, _, _, _) => true
+            AllowAutoRedirect = false,
+            ServerCertificateCustomValidationCallback = (request, _, _, _) =>
+                NetworkDestinationPolicy.AllowsLoopbackCertificateBypass(request.RequestUri)
         };
         return new HttpClient(handler);
     }
@@ -329,13 +524,28 @@ public sealed class LeagueSessionSource : ILeagueSessionSource
         string path,
         CancellationToken cancellationToken)
     {
+        using var deadline = CancellationTokenSource.CreateLinkedTokenSource(cancellationToken);
+        deadline.CancelAfter(client.Timeout);
+        var requestToken = deadline.Token;
         var destination = new Uri(
             client.BaseAddress ?? throw new InvalidOperationException("HTTP client has no base address."),
             path);
         NetworkDestinationPolicy.RequireAllowed(destination, NetworkDestinationPurpose.RuntimeData);
-        using var response = await client.GetAsync(destination, cancellationToken);
+        using var response = await client.GetAsync(
+            destination,
+            HttpCompletionOption.ResponseHeadersRead,
+            requestToken);
         response.EnsureSuccessStatusCode();
-        return await response.Content.ReadAsStringAsync(cancellationToken);
+        if (response.Content.Headers.ContentLength > MaximumLocalJsonBytes)
+        {
+            throw new InvalidDataException($"Local response exceeds the {MaximumLocalJsonBytes}-byte limit.");
+        }
+
+        await using var stream = await response.Content.ReadAsStreamAsync(requestToken);
+        return await BoundedStreamReader.ReadUtf8Async(
+            stream,
+            MaximumLocalJsonBytes,
+            requestToken);
     }
 
     private static LeaguePhase MapPhase(string? value) => value switch
@@ -394,4 +604,13 @@ public sealed class LeagueSessionSource : ILeagueSessionSource
             Array.Empty<ChampSelectMember>(),
             Array.Empty<RawPlayerState>(),
             status);
+
+    private void ClearSessionState()
+    {
+        _summonerNames.Clear();
+        _activeRiotId = null;
+        _nextActiveIdentityLookupAt = default;
+        _queueId = 0;
+        _nextMatchMetadataLookupAt = default;
+    }
 }

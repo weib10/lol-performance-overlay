@@ -416,6 +416,7 @@ internal static class PackageBuilder
         ValidateOverlayDataBoundary(context, violations);
         ValidateSyntheticFixtureConstructionPolicy(context, violations);
         ValidateRuntimeNetworkPolicyContract(context, violations);
+        ValidateGameIntegrityBoundary(context, violations);
         if (violations.Count != 0)
         {
             throw new InvalidDataException(
@@ -645,15 +646,22 @@ internal static class PackageBuilder
             violations,
             "src/LolPerformanceOverlay/Infrastructure/DataDragonProvider.cs",
             "private static Uri DataDragonUri(",
+            "AllowAutoRedirect = false",
             "NetworkDestinationPolicy.RequireAllowed(",
+            "deadline.CancelAfter(_httpClient.Timeout)",
+            "BoundedStreamReader.Read",
             "NetworkDestinationPurpose.RuntimeData");
         RequireSourceContract(
             context,
             violations,
             "src/LolPerformanceOverlay/Infrastructure/LeagueSessionSource.cs",
             "private static async Task<string> GetStringAsync(",
+            "AllowAutoRedirect = false",
+            "NetworkDestinationPolicy.AllowsLoopbackCertificateBypass(request.RequestUri)",
             "NetworkDestinationPolicy.RequireAllowed(destination, NetworkDestinationPurpose.RuntimeData);",
-            "client.GetAsync(destination, cancellationToken)");
+            "deadline.CancelAfter(client.Timeout)",
+            "HttpCompletionOption.ResponseHeadersRead",
+            "BoundedStreamReader.ReadUtf8Async(");
         RequireSourceContract(
             context,
             violations,
@@ -699,6 +707,50 @@ internal static class PackageBuilder
         {
             violations.Add("eng/package-config.json: browser policy declaration is missing op.gg");
         }
+    }
+
+    private static void ValidateGameIntegrityBoundary(
+        BuildContext context,
+        ICollection<string> violations)
+    {
+        foreach (var path in EnumerateRepositoryFiles(context)
+                     .Where(path => string.Equals(Path.GetExtension(path), ".cs", StringComparison.OrdinalIgnoreCase))
+                     .Where(path => Path.GetRelativePath(context.Root, path)
+                         .Split(Path.DirectorySeparatorChar, Path.AltDirectorySeparatorChar)
+                         .FirstOrDefault()
+                         ?.Equals("src", StringComparison.OrdinalIgnoreCase) == true))
+        {
+            var relative = Path.GetRelativePath(context.Root, path).Replace('\\', '/');
+            foreach (var capability in FindForbiddenGameCapabilities(File.ReadAllText(path)))
+            {
+                violations.Add($"{relative}: forbidden game-integrity capability reference: {capability}");
+            }
+        }
+    }
+
+    internal static IReadOnlyList<string> FindForbiddenGameCapabilities(string source)
+    {
+        string[] forbiddenCapabilities =
+        [
+            "ReadProcessMemory",
+            "WriteProcessMemory",
+            "OpenProcess(",
+            "VirtualAllocEx",
+            "CreateRemoteThread",
+            "SetWindowsHookEx",
+            "Direct3DCreate9",
+            "D3D11CreateDevice",
+            "SendInput(",
+            "mouse_event(",
+            "keybd_event(",
+            "DeviceIoControl(",
+            "NtWriteVirtualMemory",
+            "WinDivert"
+        ];
+
+        return forbiddenCapabilities
+            .Where(capability => source.Contains(capability, StringComparison.Ordinal))
+            .ToArray();
     }
 
     private static void RequireSourceContract(
@@ -851,6 +903,7 @@ internal static class PackageBuilder
                     "--no-restore",
                     "--nologo",
                     "-warnaserror",
+                    "-m:1",
                     "-p:EnableWindowsTargeting=true"
                 ]);
             }

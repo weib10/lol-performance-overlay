@@ -14,7 +14,7 @@ public interface IStaticGameDataProvider
 {
     Task InitializeAsync(CancellationToken cancellationToken);
     ChampionDescriptor ResolveChampion(string championName, int championId = 0);
-    Task<string?> EnsureChampionIconAsync(ChampionDescriptor champion, CancellationToken cancellationToken);
+    ValueTask<string?> EnsureChampionIconAsync(ChampionDescriptor champion, CancellationToken cancellationToken);
     int GetItemGoldValue(int itemId);
 }
 

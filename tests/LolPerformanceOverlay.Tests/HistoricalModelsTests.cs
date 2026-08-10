@@ -7,6 +7,39 @@ namespace LolPerformanceOverlay.Tests;
 public sealed class HistoricalModelsTests
 {
     [Fact]
+    public void HistoricalProfileRejectsUnboundedNestedCollections()
+    {
+        var champions = Enumerable.Range(0, 33)
+            .Select(index => new HistoricalChampionUsage($"Synthetic Champion {index}", 1));
+        var roles = Enumerable.Range(0, 9)
+            .Select(index => new HistoricalRoleUsage($"ROLE-{index}", 1));
+        var player = HistoricalTestData.Player(1);
+        var now = new DateTimeOffset(2026, 8, 10, 8, 0, 0, TimeSpan.Zero);
+
+        Assert.Throws<ArgumentOutOfRangeException>(() => HistoricalTestData.Profile(
+            player,
+            HistoricalQueue.RankedSolo,
+            now,
+            commonChampions: champions));
+        Assert.Throws<ArgumentOutOfRangeException>(() => HistoricalTestData.Profile(
+            player,
+            HistoricalQueue.RankedSolo,
+            now,
+            commonRoles: roles));
+    }
+
+    [Fact]
+    public void RevealedIdentityRejectsOversizedProviderFields()
+    {
+        Assert.False(RevealedPlayerIdentity.TryCreateNormallyRevealed(
+            new string('s', 257),
+            "Synthetic Player",
+            "TW2",
+            "TW2",
+            out _));
+    }
+
+    [Fact]
     public void AnonymousOrIncompleteIdentityCannotEnterHistoryBoundary()
     {
         Assert.False(RevealedPlayerIdentity.TryCreateNormallyRevealed(

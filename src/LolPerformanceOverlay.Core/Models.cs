@@ -125,7 +125,7 @@ public sealed record OverlaySnapshot(
             status);
 }
 
-internal sealed record MetricVector(
+internal readonly record struct MetricVector(
     double Economy,
     double KillShare,
     double Participation,
@@ -133,7 +133,7 @@ internal sealed record MetricVector(
     double KdaEfficiency,
     double Development);
 
-internal sealed record ArchetypeWeights(
+internal readonly record struct ArchetypeWeights(
     double Economy,
     double KillShare,
     double Participation,

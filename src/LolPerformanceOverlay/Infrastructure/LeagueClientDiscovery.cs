@@ -7,6 +7,8 @@ internal sealed record LeagueClientCredentials(int ProcessId, int Port, string P
 
 internal static class LeagueClientDiscovery
 {
+    private const int MaximumLockfileCharacters = 4_096;
+
     public static LeagueClientCredentials? TryDiscover()
     {
         var candidates = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
@@ -65,9 +67,21 @@ internal static class LeagueClientDiscovery
     {
         try
         {
+            if (new FileInfo(path).Length > MaximumLockfileCharacters)
+            {
+                return null;
+            }
+
             using var stream = new FileStream(path, FileMode.Open, FileAccess.Read, FileShare.ReadWrite);
             using var reader = new StreamReader(stream);
-            var parts = reader.ReadToEnd().Trim().Split(':');
+            var buffer = new char[MaximumLockfileCharacters + 1];
+            var length = reader.ReadBlock(buffer, 0, buffer.Length);
+            if (length > MaximumLockfileCharacters || reader.Peek() >= 0)
+            {
+                return null;
+            }
+
+            var parts = new string(buffer, 0, length).Trim().Split(':');
             if (parts.Length < 5 ||
                 !int.TryParse(parts[1], out var processId) ||
                 !int.TryParse(parts[2], out var port) ||

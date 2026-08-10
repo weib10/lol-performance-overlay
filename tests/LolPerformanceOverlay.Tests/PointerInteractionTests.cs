@@ -10,37 +10,37 @@ public sealed class PointerInteractionTests
     {
         var interaction = new PointerInteractionStateMachine(5);
 
-        Assert.Collection(
-            interaction.Handle(new PointerDown(new DipPoint(10, 20))),
-            action => Assert.IsType<CapturePointer>(action));
-        Assert.Empty(interaction.Handle(new PointerMove(new DipPoint(13, 24))));
-        Assert.Collection(
-            interaction.Handle(new PointerUp(new DipPoint(13, 24))),
-            action => Assert.Equal(new Click(new DipPoint(13, 24)), action),
-            action => Assert.IsType<ReleasePointer>(action));
+        AssertAction(interaction.HandleDown(new DipPoint(10, 20)), PointerActionKind.CapturePointer);
+        Assert.Equal(0, interaction.HandleMove(new DipPoint(13, 24)).Count);
+        var released = interaction.HandleUp(new DipPoint(13, 24));
+        Assert.Equal(2, released.Count);
+        Assert.Equal(new PointerAction(PointerActionKind.Click, Position: new DipPoint(13, 24)), released[0]);
+        Assert.Equal(PointerActionKind.ReleasePointer, released[1].Kind);
     }
 
     [Fact]
     public void MovementPastThresholdBeginsOneDragAndNeverClicks()
     {
         var interaction = new PointerInteractionStateMachine(5);
-        interaction.Handle(new PointerDown(new DipPoint(-120, 30)));
+        interaction.HandleDown(new DipPoint(-120, 30));
 
-        Assert.Collection(
-            interaction.Handle(new PointerMove(new DipPoint(-114, 30))),
-            action => Assert.Equal(
-                new BeginDrag(new DipPoint(-120, 30), new DipPoint(-114, 30)),
-                action));
-        Assert.Collection(
-            interaction.Handle(new PointerMove(new DipPoint(-110, 40))),
-            action => Assert.Equal(new DragTo(new DipPoint(-110, 40)), action));
-        var released = interaction.Handle(new PointerUp(new DipPoint(-108, 42)));
+        Assert.Equal(
+            new PointerAction(
+                PointerActionKind.BeginDrag,
+                new DipPoint(-120, 30),
+                new DipPoint(-114, 30)),
+            interaction.HandleMove(new DipPoint(-114, 30))[0]);
+        Assert.Equal(
+            new PointerAction(PointerActionKind.DragTo, Position: new DipPoint(-110, 40)),
+            interaction.HandleMove(new DipPoint(-110, 40))[0]);
+        var released = interaction.HandleUp(new DipPoint(-108, 42));
 
-        Assert.Collection(
-            released,
-            action => Assert.Equal(new EndDrag(new DipPoint(-108, 42)), action),
-            action => Assert.IsType<ReleasePointer>(action));
-        Assert.DoesNotContain(released, action => action is Click);
+        Assert.Equal(2, released.Count);
+        Assert.Equal(
+            new PointerAction(PointerActionKind.EndDrag, Position: new DipPoint(-108, 42)),
+            released[0]);
+        Assert.Equal(PointerActionKind.ReleasePointer, released[1].Kind);
+        Assert.False(Contains(released, PointerActionKind.Click));
         Assert.Equal(PointerInteractionState.Idle, interaction.State);
     }
 
@@ -48,10 +48,10 @@ public sealed class PointerInteractionTests
     public void PositionLockMakesTheHostGestureSurfaceFullyPassThrough()
     {
         var interaction = new PointerInteractionStateMachine(5);
-        interaction.Handle(new PositionLockChanged(true));
-        Assert.Empty(interaction.Handle(new PointerDown(new DipPoint(20, 20))));
-        Assert.Empty(interaction.Handle(new PointerMove(new DipPoint(200, 200))));
-        Assert.Empty(interaction.Handle(new PointerUp(new DipPoint(200, 200))));
+        interaction.HandlePositionLock(true);
+        Assert.Equal(0, interaction.HandleDown(new DipPoint(20, 20)).Count);
+        Assert.Equal(0, interaction.HandleMove(new DipPoint(200, 200)).Count);
+        Assert.Equal(0, interaction.HandleUp(new DipPoint(200, 200)).Count);
         Assert.True(interaction.IsPositionLocked);
     }
 
@@ -59,15 +59,14 @@ public sealed class PointerInteractionTests
     public void LockingDuringDragCancelsGestureAndReleasesCapture()
     {
         var interaction = new PointerInteractionStateMachine(5);
-        interaction.Handle(new PointerDown(new DipPoint(0, 0)));
-        interaction.Handle(new PointerMove(new DipPoint(6, 0)));
+        interaction.HandleDown(new DipPoint(0, 0));
+        interaction.HandleMove(new DipPoint(6, 0));
 
-        Assert.Collection(
-            interaction.Handle(new PositionLockChanged(true)),
-            action => Assert.Equal(
-                new CancelGesture(PointerCancellationReason.PositionLocked),
-                action),
-            action => Assert.IsType<ReleasePointer>(action));
+        var actions = interaction.HandlePositionLock(true);
+        Assert.Equal(2, actions.Count);
+        Assert.Equal(PointerActionKind.CancelGesture, actions[0].Kind);
+        Assert.Equal(PointerCancellationReason.PositionLocked, actions[0].Reason);
+        Assert.Equal(PointerActionKind.ReleasePointer, actions[1].Kind);
         Assert.Equal(PointerInteractionState.Idle, interaction.State);
     }
 
@@ -75,14 +74,13 @@ public sealed class PointerInteractionTests
     public void LockingWhilePressedAlsoCancelsCapture()
     {
         var interaction = new PointerInteractionStateMachine(5);
-        interaction.Handle(new PointerDown(new DipPoint(0, 0)));
+        interaction.HandleDown(new DipPoint(0, 0));
 
-        Assert.Collection(
-            interaction.Handle(new PositionLockChanged(true)),
-            action => Assert.Equal(
-                new CancelGesture(PointerCancellationReason.PositionLocked),
-                action),
-            action => Assert.IsType<ReleasePointer>(action));
+        var actions = interaction.HandlePositionLock(true);
+        Assert.Equal(2, actions.Count);
+        Assert.Equal(PointerActionKind.CancelGesture, actions[0].Kind);
+        Assert.Equal(PointerCancellationReason.PositionLocked, actions[0].Reason);
+        Assert.Equal(PointerActionKind.ReleasePointer, actions[1].Kind);
         Assert.Equal(PointerInteractionState.Idle, interaction.State);
     }
 
@@ -92,19 +90,61 @@ public sealed class PointerInteractionTests
     public void CancelAndLostCaptureCannotLeaveAStuckGesture(bool lostCapture)
     {
         var interaction = new PointerInteractionStateMachine();
-        interaction.Handle(new PointerDown(new DipPoint(0, 0)));
-        interaction.Handle(new PointerMove(new DipPoint(20, 0)));
+        interaction.HandleDown(new DipPoint(0, 0));
+        interaction.HandleMove(new DipPoint(20, 0));
 
-        var actions = interaction.Handle(lostCapture ? new PointerLostCapture() : new PointerCancel());
+        var actions = lostCapture
+            ? interaction.HandleLostCapture()
+            : interaction.HandleCancel();
 
+        Assert.Equal(PointerActionKind.CancelGesture, actions[0].Kind);
         Assert.Equal(
-            new CancelGesture(
-                lostCapture
-                    ? PointerCancellationReason.LostCapture
-                    : PointerCancellationReason.Cancelled),
-            actions[0]);
+            lostCapture ? PointerCancellationReason.LostCapture : PointerCancellationReason.Cancelled,
+            actions[0].Reason);
         Assert.Equal(lostCapture ? 1 : 2, actions.Count);
         Assert.Equal(PointerInteractionState.Idle, interaction.State);
-        Assert.Empty(interaction.Handle(new PointerUp(new DipPoint(20, 0))));
+        Assert.Equal(0, interaction.HandleUp(new DipPoint(20, 0)).Count);
+    }
+
+    [Fact]
+    public void DragMoveHotPathDoesNotAllocate()
+    {
+        var interaction = new PointerInteractionStateMachine();
+        interaction.HandleDown(new DipPoint(0, 0));
+        interaction.HandleMove(new DipPoint(10, 0));
+        var before = GC.GetAllocatedBytesForCurrentThread();
+        var observedDragMoves = 0;
+
+        for (var index = 0; index < 10_000; index++)
+        {
+            var actions = interaction.HandleMove(new DipPoint(10 + index, index));
+            if (actions[0].Kind == PointerActionKind.DragTo)
+            {
+                observedDragMoves++;
+            }
+        }
+
+        var allocatedBytes = GC.GetAllocatedBytesForCurrentThread() - before;
+        Assert.Equal(10_000, observedDragMoves);
+        Assert.Equal(0, allocatedBytes);
+    }
+
+    private static void AssertAction(PointerActionBatch actions, PointerActionKind expected)
+    {
+        Assert.Equal(1, actions.Count);
+        Assert.Equal(expected, actions[0].Kind);
+    }
+
+    private static bool Contains(PointerActionBatch actions, PointerActionKind kind)
+    {
+        for (var index = 0; index < actions.Count; index++)
+        {
+            if (actions[index].Kind == kind)
+            {
+                return true;
+            }
+        }
+
+        return false;
     }
 }

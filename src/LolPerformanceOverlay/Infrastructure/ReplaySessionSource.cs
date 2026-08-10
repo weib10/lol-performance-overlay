@@ -61,13 +61,21 @@ public sealed class ReplaySessionSource : IReplaySource
 
     private async Task<LeagueSessionFrame> ChampSelectFrameAsync(CancellationToken cancellationToken)
     {
-        var specs = Roster();
+        var specs = Roster;
+        var descriptors = new ChampionDescriptor[specs.Count];
+        var iconRequests = new ValueTask<string?>[specs.Count];
+        for (var index = 0; index < specs.Count; index++)
+        {
+            descriptors[index] = _staticData.ResolveChampion(specs[index].ChampionKey);
+            iconRequests[index] = _staticData.EnsureChampionIconAsync(descriptors[index], cancellationToken);
+        }
+
         var members = new List<ChampSelectMember>(specs.Count);
         for (var index = 0; index < specs.Count; index++)
         {
             var spec = specs[index];
-            var descriptor = _staticData.ResolveChampion(spec.ChampionKey);
-            var icon = await _staticData.EnsureChampionIconAsync(descriptor, cancellationToken);
+            var descriptor = descriptors[index];
+            var icon = await iconRequests[index];
             var anonymous = index is 7 or 9;
             members.Add(new ChampSelectMember(
                 $"cell-{index}",
@@ -96,13 +104,21 @@ public sealed class ReplaySessionSource : IReplaySource
         ReplayStage stage,
         CancellationToken cancellationToken)
     {
-        var specs = Roster();
+        var specs = Roster;
+        var descriptors = new ChampionDescriptor[specs.Count];
+        var iconRequests = new ValueTask<string?>[specs.Count];
+        for (var index = 0; index < specs.Count; index++)
+        {
+            descriptors[index] = _staticData.ResolveChampion(specs[index].ChampionKey);
+            iconRequests[index] = _staticData.EnsureChampionIconAsync(descriptors[index], cancellationToken);
+        }
+
         var players = new List<RawPlayerState>(specs.Count);
         for (var index = 0; index < specs.Count; index++)
         {
             var spec = specs[index];
-            var descriptor = _staticData.ResolveChampion(spec.ChampionKey);
-            var icon = await _staticData.EnsureChampionIconAsync(descriptor, cancellationToken);
+            var descriptor = descriptors[index];
+            var icon = await iconRequests[index];
             var stat = spec.Stages[stage.Index];
             players.Add(new RawPlayerState(
                 $"{spec.Team}:{spec.RiotId}",
@@ -133,7 +149,7 @@ public sealed class ReplaySessionSource : IReplaySource
             "tw2");
     }
 
-    private static IReadOnlyList<ReplayPlayerSpec> Roster() =>
+    private static readonly IReadOnlyList<ReplayPlayerSpec> Roster =
     [
         new(
             "測試玩家01#TEST",

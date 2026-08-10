@@ -1,11 +1,12 @@
-using System.Collections.Concurrent;
-
 namespace LolPerformanceOverlay.Core;
 
 public sealed class PerformanceScorer : IPerformanceScorer
 {
     private const double EmaAlpha = 0.35;
-    private readonly ConcurrentDictionary<string, double> _smoothedScores = new(StringComparer.Ordinal);
+    private const double PercentileEpsilon = 0.000001d;
+    private readonly Dictionary<string, double> _smoothedScores = new(StringComparer.Ordinal);
+    private LeaguePhase _lastPhase = LeaguePhase.None;
+    private double _lastGameTimeSeconds;
 
     private static readonly IReadOnlyDictionary<ChampionArchetype, ArchetypeWeights> Weights =
         new Dictionary<ChampionArchetype, ArchetypeWeights>
@@ -18,30 +19,34 @@ public sealed class PerformanceScorer : IPerformanceScorer
             [ChampionArchetype.Support] = new(0.10, 0.05, 0.35, 0.25, 0.20, 0.05)
         };
 
-    private static readonly IReadOnlyDictionary<string, IReadOnlyList<(ChampionArchetype Type, double Weight)>>
+    private static readonly IReadOnlyDictionary<string, ArchetypeBlend>
         ChampionOverrides =
-            new Dictionary<string, IReadOnlyList<(ChampionArchetype, double)>>(StringComparer.OrdinalIgnoreCase)
+            new Dictionary<string, ArchetypeBlend>(StringComparer.OrdinalIgnoreCase)
             {
-                ["Senna"] = [(ChampionArchetype.Marksman, 0.60), (ChampionArchetype.Support, 0.40)],
-                ["Pyke"] = [(ChampionArchetype.Assassin, 0.50), (ChampionArchetype.Support, 0.50)],
-                ["Karma"] = [(ChampionArchetype.Mage, 0.50), (ChampionArchetype.Support, 0.50)],
-                ["Seraphine"] = [(ChampionArchetype.Mage, 0.50), (ChampionArchetype.Support, 0.50)],
-                ["TahmKench"] = [(ChampionArchetype.Tank, 0.70), (ChampionArchetype.Support, 0.30)],
-                ["Rakan"] = [(ChampionArchetype.Support, 0.70), (ChampionArchetype.Tank, 0.30)],
-                ["Bard"] = [(ChampionArchetype.Support, 0.70), (ChampionArchetype.Mage, 0.30)],
-                ["Ivern"] = [(ChampionArchetype.Support, 0.60), (ChampionArchetype.Mage, 0.40)],
-                ["Milio"] = [(ChampionArchetype.Support, 1.0)],
-                ["Lulu"] = [(ChampionArchetype.Support, 1.0)],
-                ["Janna"] = [(ChampionArchetype.Support, 1.0)],
-                ["Soraka"] = [(ChampionArchetype.Support, 1.0)],
-                ["Yuumi"] = [(ChampionArchetype.Support, 1.0)],
-                ["Nami"] = [(ChampionArchetype.Support, 1.0)],
-                ["Sona"] = [(ChampionArchetype.Support, 1.0)]
+                ["Senna"] = new(ChampionArchetype.Marksman, 0.60, ChampionArchetype.Support, 0.40),
+                ["Pyke"] = new(ChampionArchetype.Assassin, 0.50, ChampionArchetype.Support, 0.50),
+                ["Karma"] = new(ChampionArchetype.Mage, 0.50, ChampionArchetype.Support, 0.50),
+                ["Seraphine"] = new(ChampionArchetype.Mage, 0.50, ChampionArchetype.Support, 0.50),
+                ["TahmKench"] = new(ChampionArchetype.Tank, 0.70, ChampionArchetype.Support, 0.30),
+                ["Rakan"] = new(ChampionArchetype.Support, 0.70, ChampionArchetype.Tank, 0.30),
+                ["Bard"] = new(ChampionArchetype.Support, 0.70, ChampionArchetype.Mage, 0.30),
+                ["Ivern"] = new(ChampionArchetype.Support, 0.60, ChampionArchetype.Mage, 0.40),
+                ["Milio"] = new(ChampionArchetype.Support, 1.0),
+                ["Lulu"] = new(ChampionArchetype.Support, 1.0),
+                ["Janna"] = new(ChampionArchetype.Support, 1.0),
+                ["Soraka"] = new(ChampionArchetype.Support, 1.0),
+                ["Yuumi"] = new(ChampionArchetype.Support, 1.0),
+                ["Nami"] = new(ChampionArchetype.Support, 1.0),
+                ["Sona"] = new(ChampionArchetype.Support, 1.0)
             };
+
+    internal int RetainedScoreCount => _smoothedScores.Count;
 
     public OverlaySnapshot Evaluate(LeagueSessionFrame frame)
     {
-        return frame.Phase switch
+        ArgumentNullException.ThrowIfNull(frame);
+        PrepareSessionState(frame);
+        var snapshot = frame.Phase switch
         {
             LeaguePhase.ChampSelect => BuildChampSelectSnapshot(frame),
             LeaguePhase.InGame or LeaguePhase.Loading when frame.LivePlayers.Count > 0 =>
@@ -59,9 +64,16 @@ public sealed class PerformanceScorer : IPerformanceScorer
                 Summary = frame.StatusMessage ?? "等待遊戲資料"
             }
         };
+        _lastPhase = frame.Phase;
+        return snapshot;
     }
 
-    public void Reset() => _smoothedScores.Clear();
+    public void Reset()
+    {
+        _smoothedScores.Clear();
+        _lastPhase = LeaguePhase.None;
+        _lastGameTimeSeconds = 0d;
+    }
 
     private static OverlaySnapshot BuildChampSelectSnapshot(LeagueSessionFrame frame)
     {
@@ -104,20 +116,41 @@ public sealed class PerformanceScorer : IPerformanceScorer
     {
         var players = frame.LivePlayers;
         var minutes = Math.Max(frame.GameTimeSeconds / 60d, 1d / 60d);
-        var teamKills = players
-            .GroupBy(player => player.Team)
-            .ToDictionary(group => group.Key, group => group.Sum(player => player.Kills));
+        var teamKills = new Dictionary<int, int>();
+        for (var index = 0; index < players.Count; index++)
+        {
+            var player = players[index];
+            teamKills[player.Team] = teamKills.GetValueOrDefault(player.Team) + player.Kills;
+        }
 
-        var economy = players.Select(ItemGold).ToArray();
-        var killShare = players.Select(player =>
-            player.Kills / Math.Max(teamKills.GetValueOrDefault(player.Team), 1d)).ToArray();
-        var participation = players.Select(player =>
-            (player.Kills + player.Assists) / Math.Max(teamKills.GetValueOrDefault(player.Team), 1d)).ToArray();
-        var survival = players.Select(player => -player.Deaths / minutes).ToArray();
-        var kda = players.Select(player =>
-            (player.Kills + player.Assists) / Math.Max(player.Deaths, 1d)).ToArray();
-        var levels = players.Select(player => (double)player.Level).ToArray();
-        var creepRate = players.Select(player => player.CreepScore / minutes).ToArray();
+        var economy = new double[players.Count];
+        var killShare = new double[players.Count];
+        var participation = new double[players.Count];
+        var survival = new double[players.Count];
+        var kda = new double[players.Count];
+        var levels = new double[players.Count];
+        var creepRate = new double[players.Count];
+        for (var index = 0; index < players.Count; index++)
+        {
+            var player = players[index];
+            var teamKillCount = Math.Max(teamKills.GetValueOrDefault(player.Team), 1d);
+            economy[index] = ItemGold(player);
+            killShare[index] = player.Kills / teamKillCount;
+            participation[index] = (player.Kills + player.Assists) / teamKillCount;
+            survival[index] = -player.Deaths / minutes;
+            kda[index] = (player.Kills + player.Assists) / Math.Max(player.Deaths, 1d);
+            levels[index] = player.Level;
+            creepRate[index] = player.CreepScore / minutes;
+        }
+
+        var rankBuffer = new RankedValue[players.Count];
+        ReplaceWithPercentileRanks(economy, rankBuffer);
+        ReplaceWithPercentileRanks(killShare, rankBuffer);
+        ReplaceWithPercentileRanks(participation, rankBuffer);
+        ReplaceWithPercentileRanks(survival, rankBuffer);
+        ReplaceWithPercentileRanks(kda, rankBuffer);
+        ReplaceWithPercentileRanks(levels, rankBuffer);
+        ReplaceWithPercentileRanks(creepRate, rankBuffer);
 
         var confidenceValue = ConfidenceValue(frame);
         var confidence = ConfidenceLabel(confidenceValue);
@@ -126,20 +159,21 @@ public sealed class PerformanceScorer : IPerformanceScorer
         for (var index = 0; index < players.Count; index++)
         {
             var metric = new MetricVector(
-                Percentile(economy, economy[index]),
-                Percentile(killShare, killShare[index]),
-                Percentile(participation, participation[index]),
-                Percentile(survival, survival[index]),
-                Percentile(kda, kda[index]),
-                0.70 * Percentile(levels, levels[index]) + 0.30 * Percentile(creepRate, creepRate[index]));
+                economy[index],
+                killShare[index],
+                participation[index],
+                survival[index],
+                kda[index],
+                0.70 * levels[index] + 0.30 * creepRate[index]);
 
             var rawScore = ResolveWeights(players[index]).Apply(metric) * 100d;
             var confidenceAdjusted = 50d + confidenceValue * (rawScore - 50d);
-            var smoothed = _smoothedScores.AddOrUpdate(
-                players[index].StableKey,
-                confidenceAdjusted,
-                (_, previous) => previous + EmaAlpha * (confidenceAdjusted - previous));
+            var stableKey = players[index].StableKey;
+            var smoothed = _smoothedScores.TryGetValue(stableKey, out var previous)
+                ? previous + EmaAlpha * (confidenceAdjusted - previous)
+                : confidenceAdjusted;
             smoothed = Math.Clamp(smoothed, 0d, 100d);
+            _smoothedScores[stableKey] = smoothed;
 
             overlayPlayers.Add(new OverlayPlayer(
                 players[index].StableKey,
@@ -152,6 +186,8 @@ public sealed class PerformanceScorer : IPerformanceScorer
                 ScoreLabel(smoothed),
                 confidence));
         }
+
+        PruneScoresToCurrentRoster(players);
 
         var teams = overlayPlayers
             .GroupBy(player => player.Team)
@@ -195,46 +231,151 @@ public sealed class PerformanceScorer : IPerformanceScorer
 
     private static ArchetypeWeights ResolveWeights(RawPlayerState player)
     {
-        IReadOnlyList<(ChampionArchetype Type, double Weight)> components;
-        if (ChampionOverrides.TryGetValue(player.ChampionKey, out var overridden))
+        if (ChampionOverrides.TryGetValue(player.ChampionKey, out var blend))
         {
-            components = overridden;
-        }
-        else
-        {
-            var tags = player.Archetypes
-                .Distinct()
-                .Take(2)
-                .ToArray();
-            components = tags.Length switch
-            {
-                0 => [(ChampionArchetype.Fighter, 1d)],
-                1 => [(tags[0], 1d)],
-                _ => [(tags[0], 0.70d), (tags[1], 0.30d)]
-            };
+            return BlendWeights(blend);
         }
 
-        var total = components.Sum(component => component.Weight);
-        return new ArchetypeWeights(
-            components.Sum(component => Weights[component.Type].Economy * component.Weight) / total,
-            components.Sum(component => Weights[component.Type].KillShare * component.Weight) / total,
-            components.Sum(component => Weights[component.Type].Participation * component.Weight) / total,
-            components.Sum(component => Weights[component.Type].Survival * component.Weight) / total,
-            components.Sum(component => Weights[component.Type].KdaEfficiency * component.Weight) / total,
-            components.Sum(component => Weights[component.Type].Development * component.Weight) / total);
+        var primary = ChampionArchetype.Fighter;
+        ChampionArchetype? secondary = null;
+        var foundPrimary = false;
+        for (var index = 0; index < player.Archetypes.Count; index++)
+        {
+            var candidate = player.Archetypes[index];
+            if (!foundPrimary)
+            {
+                primary = candidate;
+                foundPrimary = true;
+            }
+            else if (candidate != primary)
+            {
+                secondary = candidate;
+                break;
+            }
+        }
+
+        return BlendWeights(secondary.HasValue
+            ? new ArchetypeBlend(primary, 0.70, secondary.Value, 0.30)
+            : new ArchetypeBlend(primary, 1.0));
     }
 
-    internal static double Percentile(IReadOnlyList<double> values, double value)
+    private static ArchetypeWeights BlendWeights(ArchetypeBlend blend)
     {
-        if (values.Count <= 1)
+        var primary = Weights[blend.Primary];
+        if (!blend.Secondary.HasValue || blend.SecondaryWeight <= 0)
         {
-            return 0.5d;
+            return primary;
         }
 
-        const double epsilon = 0.000001d;
-        var less = values.Count(candidate => candidate < value - epsilon);
-        var equal = values.Count(candidate => Math.Abs(candidate - value) <= epsilon);
-        return Math.Clamp((less + 0.5d * Math.Max(equal - 1, 0)) / (values.Count - 1d), 0d, 1d);
+        var secondary = Weights[blend.Secondary.Value];
+        var total = blend.PrimaryWeight + blend.SecondaryWeight;
+        return new ArchetypeWeights(
+            (primary.Economy * blend.PrimaryWeight + secondary.Economy * blend.SecondaryWeight) / total,
+            (primary.KillShare * blend.PrimaryWeight + secondary.KillShare * blend.SecondaryWeight) / total,
+            (primary.Participation * blend.PrimaryWeight + secondary.Participation * blend.SecondaryWeight) / total,
+            (primary.Survival * blend.PrimaryWeight + secondary.Survival * blend.SecondaryWeight) / total,
+            (primary.KdaEfficiency * blend.PrimaryWeight + secondary.KdaEfficiency * blend.SecondaryWeight) / total,
+            (primary.Development * blend.PrimaryWeight + secondary.Development * blend.SecondaryWeight) / total);
+    }
+
+    internal static double[] PercentileRanksForTesting(IReadOnlyList<double> values)
+    {
+        var result = values.ToArray();
+        ReplaceWithPercentileRanks(result, new RankedValue[result.Length]);
+        return result;
+    }
+
+    private static void ReplaceWithPercentileRanks(double[] values, RankedValue[] buffer)
+    {
+        if (values.Length <= 1)
+        {
+            if (values.Length == 1)
+            {
+                values[0] = 0.5d;
+            }
+
+            return;
+        }
+
+        for (var index = 0; index < values.Length; index++)
+        {
+            buffer[index] = new RankedValue(values[index], index);
+        }
+
+        Array.Sort(buffer, 0, values.Length, RankedValueComparer.Instance);
+        var lower = 0;
+        var upper = 0;
+        for (var sortedIndex = 0; sortedIndex < values.Length; sortedIndex++)
+        {
+            var value = buffer[sortedIndex].Value;
+            while (lower < values.Length && buffer[lower].Value < value - PercentileEpsilon)
+            {
+                lower++;
+            }
+
+            upper = Math.Max(upper, lower);
+            while (upper < values.Length && buffer[upper].Value <= value + PercentileEpsilon)
+            {
+                upper++;
+            }
+
+            var equal = upper - lower;
+            values[buffer[sortedIndex].OriginalIndex] = Math.Clamp(
+                (lower + 0.5d * Math.Max(equal - 1, 0)) / (values.Length - 1d),
+                0d,
+                1d);
+        }
+    }
+
+    private void PrepareSessionState(LeagueSessionFrame frame)
+    {
+        var isLive = frame.Phase is LeaguePhase.Loading or LeaguePhase.InGame;
+        var wasActiveSession = _lastPhase is LeaguePhase.ChampSelect or LeaguePhase.Loading or LeaguePhase.InGame;
+        var gameClockRestarted = isLive &&
+                                 _lastPhase is LeaguePhase.Loading or LeaguePhase.InGame &&
+                                 frame.GameTimeSeconds + 30d < _lastGameTimeSeconds;
+        if ((frame.Phase == LeaguePhase.ChampSelect && _lastPhase != LeaguePhase.ChampSelect) ||
+            (isLive && !wasActiveSession) ||
+            gameClockRestarted ||
+            (!isLive && frame.Phase != LeaguePhase.ChampSelect && _smoothedScores.Count > 0))
+        {
+            _smoothedScores.Clear();
+        }
+
+        _lastGameTimeSeconds = isLive ? Math.Max(frame.GameTimeSeconds, 0d) : 0d;
+    }
+
+    private void PruneScoresToCurrentRoster(IReadOnlyList<RawPlayerState> players)
+    {
+        if (_smoothedScores.Count <= players.Count)
+        {
+            return;
+        }
+
+        var currentKeys = new HashSet<string>(players.Select(player => player.StableKey), StringComparer.Ordinal);
+        foreach (var key in _smoothedScores.Keys.Where(key => !currentKeys.Contains(key)).ToArray())
+        {
+            _smoothedScores.Remove(key);
+        }
+    }
+
+    private readonly record struct ArchetypeBlend(
+        ChampionArchetype Primary,
+        double PrimaryWeight,
+        ChampionArchetype? Secondary = null,
+        double SecondaryWeight = 0);
+
+    private readonly record struct RankedValue(double Value, int OriginalIndex);
+
+    private sealed class RankedValueComparer : IComparer<RankedValue>
+    {
+        public static RankedValueComparer Instance { get; } = new();
+
+        public int Compare(RankedValue left, RankedValue right)
+        {
+            var byValue = left.Value.CompareTo(right.Value);
+            return byValue != 0 ? byValue : left.OriginalIndex.CompareTo(right.OriginalIndex);
+        }
     }
 
     internal static double ConfidenceValue(LeagueSessionFrame frame)
@@ -257,14 +398,14 @@ public sealed class PerformanceScorer : IPerformanceScorer
 
     private static string ScoreLabel(double score) =>
         score >= 75d
-            ? "強勢"
+            ? "本場較高"
             : score >= 60d
-                ? "領先"
+                ? "本場偏高"
                 : score >= 40d
-                    ? "持平"
+                    ? "本場接近"
                     : score >= 25d
-                        ? "落後"
-                        : "明顯落後";
+                        ? "本場偏低"
+                        : "本場較低";
 
     private static string BuildTeamSummary(
         IReadOnlyList<OverlayTeam> teams,
@@ -283,8 +424,8 @@ public sealed class PerformanceScorer : IPerformanceScorer
         }
 
         var prefix = activeTeam.HasValue
-            ? leadingTeam == activeTeam ? "我方領先" : "我方落後"
-            : $"{TeamName(leadingTeam.Value)}領先";
+            ? leadingTeam == activeTeam ? "我方本場指標較高" : "我方本場指標較低"
+            : $"{TeamName(leadingTeam.Value)}本場指標較高";
         return $"{prefix} · 差 {gap.Value:0.0}";
     }
 

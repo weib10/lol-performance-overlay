@@ -62,8 +62,17 @@ public static class AtomicFile
             $".{Path.GetFileName(fullPath)}.{Guid.NewGuid():N}.tmp");
         try
         {
-            await File.WriteAllBytesAsync(temporaryPath, contents.ToArray(), cancellationToken)
-                .ConfigureAwait(false);
+            await using (var stream = new FileStream(
+                             temporaryPath,
+                             FileMode.CreateNew,
+                             FileAccess.Write,
+                             FileShare.None,
+                             bufferSize: 16 * 1024,
+                             FileOptions.Asynchronous))
+            {
+                await stream.WriteAsync(contents, cancellationToken).ConfigureAwait(false);
+                await stream.FlushAsync(cancellationToken).ConfigureAwait(false);
+            }
             cancellationToken.ThrowIfCancellationRequested();
             File.Move(temporaryPath, fullPath, overwrite: true);
         }

@@ -13,6 +13,7 @@ public partial class App : System.Windows.Application
 {
     private readonly CancellationTokenSource _shutdown = new();
     private Mutex? _singleInstance;
+    private bool _ownsSingleInstanceMutex;
     private SettingsStore? _settingsStore;
     private AppSettings? _settings;
     private DataDragonProvider? _staticData;
@@ -21,15 +22,23 @@ public partial class App : System.Windows.Application
     private IHistoricalProfileProvider? _historicalProvider;
     private readonly OverlayUpdateReducer _updateReducer = new(TimeSpan.FromMilliseconds(250));
     private readonly object _flushGate = new();
+    private readonly object _historyGate = new();
     private OverlayWindow? _overlay;
     private TrayIconService? _tray;
     private GlobalHotkey? _hotkey;
     private CancellationTokenSource? _endHide;
-    private CancellationTokenSource? _saveDebounce;
     private CancellationTokenSource? _historyLookup;
-    private CancellationTokenSource? _flushDelay;
+    private ITimer? _flushTimer;
+    private LatestValueDebouncer<AppSettingsSnapshot>? _positionSave;
+    private Task? _staticDataInitializationTask;
+    private Task? _sessionLoopTask;
+    private Task? _historyLookupTask;
     private LeagueSessionFrame? _pendingFrame;
-    private string? _historyRosterKey;
+    private string[]? _historyRosterKeys;
+    private string? _historyRosterRegion;
+    private int _historyRosterQueueId;
+    private string? _historyRosterGameMode;
+    private long _historyRosterGeneration;
     private LeaguePhase _lastPhase = LeaguePhase.None;
     private bool _demoExpanded;
     private bool _isDemo;
@@ -41,11 +50,18 @@ public partial class App : System.Windows.Application
             initiallyOwned: true,
             "Local\\LolPerformanceOverlay.SingleInstance",
             out var createdNew);
+        _ownsSingleInstanceMutex = createdNew;
         if (!createdNew)
         {
             Shutdown();
             return;
         }
+
+        _flushTimer = TimeProvider.System.CreateTimer(
+            static state => ((App)state!).FlushReducerFromTimer(),
+            this,
+            Timeout.InfiniteTimeSpan,
+            Timeout.InfiniteTimeSpan);
 
         _settingsStore = new SettingsStore();
         _settings = _settingsStore.Load();
@@ -54,6 +70,12 @@ public partial class App : System.Windows.Application
             argument.Equals("--demo-expanded", StringComparison.OrdinalIgnoreCase));
         _demoExpanded = e.Args.Any(argument =>
             argument.Equals("--demo-expanded", StringComparison.OrdinalIgnoreCase));
+        if (!_isDemo)
+        {
+            _positionSave = new LatestValueDebouncer<AppSettingsSnapshot>(
+                TimeSpan.FromMilliseconds(500),
+                (snapshot, cancellationToken) => _settingsStore.SaveAsync(snapshot, cancellationToken));
+        }
 
         var windowSettings = _settings.Clone();
         if (_isDemo)
@@ -77,7 +99,7 @@ public partial class App : System.Windows.Application
         if (hotkeyResult.Status == HotkeyRegistrationStatus.FallbackRegistered)
         {
             _settings.Hotkey = hotkeyResult.RegisteredGesture!;
-            _ = _settingsStore.SaveAsync(_settings);
+            QueueSettingsSave(flushImmediately: true);
         }
 
         _tray = new TrayIconService(_settings.StartWithWindows, _settings.PositionLocked);
@@ -98,9 +120,12 @@ public partial class App : System.Windows.Application
         }
 
         _staticData = new DataDragonProvider();
+        _staticDataInitializationTask = Task.Run(
+            () => _staticData.InitializeAsync(_shutdown.Token),
+            _shutdown.Token);
         try
         {
-            await Task.Run(() => _staticData.InitializeAsync(_shutdown.Token), _shutdown.Token);
+            await _staticDataInitializationTask;
         }
         catch (OperationCanceledException) when (_shutdown.IsCancellationRequested)
         {
@@ -110,6 +135,14 @@ public partial class App : System.Windows.Application
         {
             // Static names and icons may fall back to safe unknown values; startup must still recover.
         }
+
+        // Shutdown can run while the asynchronous static-data initialization is in flight. Never
+        // create a new session graph after OnExit has begun disposing application resources.
+        if (_shutdown.IsCancellationRequested)
+        {
+            return;
+        }
+
         _scorer = new PerformanceScorer();
         _historicalProvider = _isDemo
             ? new SyntheticHistoricalProfileProvider()
@@ -118,20 +151,25 @@ public partial class App : System.Windows.Application
             ? new ReplaySessionSource(_staticData)
             : new LeagueSessionSource(_staticData);
 
-        _ = Task.Run(() => RunSessionLoopAsync(_shutdown.Token), _shutdown.Token);
+        _sessionLoopTask = Task.Run(() => RunSessionLoopAsync(_shutdown.Token), _shutdown.Token);
     }
 
     protected override void OnExit(ExitEventArgs e)
     {
-        _saveDebounce?.Cancel();
-        _saveDebounce?.Dispose();
-        _saveDebounce = null;
-        if (!_isDemo && _settingsStore is not null && _settings is not null)
+        _shutdown.Cancel();
+        CancelEndHide();
+        var historyTask = CancelHistoricalLookup(clearRoster: true);
+        CancelScheduledFlush();
+        _flushTimer?.Dispose();
+        _flushTimer = null;
+
+        if (!_isDemo && _positionSave is not null && _settings is not null)
         {
             try
             {
                 using var finalSaveTimeout = new CancellationTokenSource(TimeSpan.FromSeconds(2));
-                _settingsStore.SaveAsync(_settings, finalSaveTimeout.Token).GetAwaiter().GetResult();
+                _positionSave.Signal(AppSettingsSnapshot.Capture(_settings));
+                _positionSave.FlushAsync(finalSaveTimeout.Token).GetAwaiter().GetResult();
             }
             catch
             {
@@ -139,10 +177,11 @@ public partial class App : System.Windows.Application
             }
         }
 
-        _shutdown.Cancel();
-        _endHide?.Cancel();
-        _historyLookup?.Cancel();
-        CancelScheduledFlush();
+        _positionSave?.Dispose();
+        _positionSave = null;
+        WaitForBackgroundTask(historyTask, TimeSpan.FromSeconds(2));
+        WaitForBackgroundTask(_sessionLoopTask, TimeSpan.FromSeconds(3));
+        WaitForBackgroundTask(_staticDataInitializationTask, TimeSpan.FromSeconds(3));
         _hotkey?.Dispose();
         _tray?.Dispose();
         if (_sessionSource is not null)
@@ -159,7 +198,12 @@ public partial class App : System.Windows.Application
 
         _staticData?.Dispose();
         (_historicalProvider as IDisposable)?.Dispose();
-        _singleInstance?.ReleaseMutex();
+        if (_ownsSingleInstanceMutex)
+        {
+            _singleInstance?.ReleaseMutex();
+            _ownsSingleInstanceMutex = false;
+        }
+
         _singleInstance?.Dispose();
         _shutdown.Dispose();
         base.OnExit(e);
@@ -181,7 +225,10 @@ public partial class App : System.Windows.Application
                 var update = OfferFrame(frame, snapshot, cancellationToken);
                 if (update is not null)
                 {
-                    await Dispatcher.InvokeAsync(() => ApplyFrame(frame, update));
+                    await Dispatcher.InvokeAsync(
+                        () => ApplyFrame(frame, update),
+                        System.Windows.Threading.DispatcherPriority.Normal,
+                        cancellationToken);
                 }
             }
         }
@@ -190,7 +237,19 @@ public partial class App : System.Windows.Application
         }
         catch
         {
-            await Dispatcher.InvokeAsync(() => _overlay?.Hide());
+            if (!cancellationToken.IsCancellationRequested && !Dispatcher.HasShutdownStarted)
+            {
+                try
+                {
+                    await Dispatcher.InvokeAsync(
+                        () => _overlay?.Hide(),
+                        System.Windows.Threading.DispatcherPriority.Normal,
+                        cancellationToken);
+                }
+                catch (OperationCanceledException) when (cancellationToken.IsCancellationRequested)
+                {
+                }
+            }
         }
     }
 
@@ -219,7 +278,6 @@ public partial class App : System.Windows.Application
             case LeaguePhase.ChampSelect:
                 if (enteredNewPhase)
                 {
-                    _scorer?.Reset();
                     _overlay.SetMode(_demoExpanded ? OverlayMode.Expanded : OverlayMode.Compact);
                 }
 
@@ -309,7 +367,7 @@ public partial class App : System.Windows.Application
             _tray?.ShowNotice("快捷鍵目前無法使用", "選擇的快捷鍵與備用快捷鍵都被占用；可繼續使用系統匣。");
         }
 
-        _ = _settingsStore?.SaveAsync(_settings);
+        QueueSettingsSave(flushImmediately: true);
     }
 
     private void SetStartup(bool enabled)
@@ -321,7 +379,7 @@ public partial class App : System.Windows.Application
 
         _settings.StartWithWindows = enabled;
         StartupManager.SetEnabled(enabled);
-        _ = _settingsStore?.SaveAsync(_settings);
+        QueueSettingsSave(flushImmediately: true);
     }
 
     private void SetPositionLocked(bool locked)
@@ -334,7 +392,7 @@ public partial class App : System.Windows.Application
         _settings.PositionLocked = locked;
         _overlay?.SetPositionLocked(locked);
         _tray?.UpdatePositionLocked(locked);
-        _ = _settingsStore?.SaveAsync(_settings);
+        QueueSettingsSave(flushImmediately: true);
     }
 
     private void ResetOverlayPosition()
@@ -371,45 +429,78 @@ public partial class App : System.Windows.Application
         {
             if (frame.Phase != LeaguePhase.InGame)
             {
-                _historyLookup?.Cancel();
-                _historyLookup?.Dispose();
-                _historyLookup = null;
-                _historyRosterKey = null;
+                CancelHistoricalLookup(clearRoster: true);
             }
 
             return;
         }
 
-        var identities = snapshot.Teams
-            .SelectMany(team => team.Players)
-            .Where(player => !player.IsAnonymous)
-            .Select(player => TryCreateRevealedIdentity(player, frame.PlatformRegion))
-            .Where(identity => identity is not null)
-            .Cast<RevealedPlayerIdentity>()
-            .Take(10)
-            .ToArray();
-        if (identities.Length == 0)
+        if (HistoryRosterMatches(snapshot, frame))
         {
             return;
         }
 
-        var rosterKey = string.Join('|', identities.Select(identity => identity.StableKey).OrderBy(key => key));
-        if (string.Equals(_historyRosterKey, rosterKey, StringComparison.Ordinal))
+        var identities = new List<RevealedPlayerIdentity>(10);
+        foreach (var team in snapshot.Teams)
         {
+            foreach (var player in team.Players)
+            {
+                if (!player.IsAnonymous &&
+                    TryCreateRevealedIdentity(player, frame.PlatformRegion) is { } identity)
+                {
+                    identities.Add(identity);
+                    if (identities.Count == 10)
+                    {
+                        break;
+                    }
+                }
+            }
+
+            if (identities.Count == 10)
+            {
+                break;
+            }
+        }
+
+        if (identities.Count == 0)
+        {
+            CancelHistoricalLookup(clearRoster: true);
             return;
         }
 
-        _historyRosterKey = rosterKey;
-        _historyLookup?.Cancel();
-        _historyLookup?.Dispose();
-        _historyLookup = CancellationTokenSource.CreateLinkedTokenSource(shutdownToken);
-        _ = RefreshHistoricalProfilesAsync(identities, frame, rosterKey, _historyLookup.Token);
+        var cancellation = CancellationTokenSource.CreateLinkedTokenSource(shutdownToken);
+        CancellationTokenSource? previousCancellation;
+        Task? previousTask;
+        lock (_historyGate)
+        {
+            if (_shutdown.IsCancellationRequested)
+            {
+                cancellation.Dispose();
+                return;
+            }
+
+            previousCancellation = _historyLookup;
+            previousTask = _historyLookupTask;
+            _historyRosterKeys = identities.Select(identity => identity.StableKey).ToArray();
+            _historyRosterRegion = frame.PlatformRegion;
+            _historyRosterQueueId = frame.QueueId;
+            _historyRosterGameMode = frame.GameMode;
+            var generation = ++_historyRosterGeneration;
+            _historyLookup = cancellation;
+            _historyLookupTask = RefreshHistoricalProfilesAsync(
+                identities,
+                frame,
+                generation,
+                cancellation.Token);
+        }
+
+        CancelAndDisposeAfterCompletion(previousCancellation, previousTask);
     }
 
     private async Task RefreshHistoricalProfilesAsync(
         IReadOnlyList<RevealedPlayerIdentity> identities,
         LeagueSessionFrame frame,
-        string rosterKey,
+        long rosterGeneration,
         CancellationToken cancellationToken)
     {
         try
@@ -428,13 +519,16 @@ public partial class App : System.Windows.Application
                 identities,
                 new HistoricalProfileQuery(queue),
                 cancellationToken).ConfigureAwait(false);
-            await Dispatcher.InvokeAsync(() =>
-            {
-                if (string.Equals(_historyRosterKey, rosterKey, StringComparison.Ordinal))
+            await Dispatcher.InvokeAsync(
+                () =>
                 {
-                    _overlay?.ApplyHistoricalProfiles(result);
-                }
-            });
+                    if (IsCurrentHistoryGeneration(rosterGeneration))
+                    {
+                        _overlay?.ApplyHistoricalProfiles(result);
+                    }
+                },
+                System.Windows.Threading.DispatcherPriority.Normal,
+                cancellationToken);
         }
         catch (OperationCanceledException) when (cancellationToken.IsCancellationRequested)
         {
@@ -465,6 +559,119 @@ public partial class App : System.Windows.Application
             : null;
     }
 
+    private bool HistoryRosterMatches(OverlaySnapshot snapshot, LeagueSessionFrame frame)
+    {
+        lock (_historyGate)
+        {
+            if (_historyRosterKeys is null ||
+                !string.Equals(_historyRosterRegion, frame.PlatformRegion, StringComparison.OrdinalIgnoreCase) ||
+                _historyRosterQueueId != frame.QueueId ||
+                !string.Equals(_historyRosterGameMode, frame.GameMode, StringComparison.OrdinalIgnoreCase))
+            {
+                return false;
+            }
+
+            var index = 0;
+            foreach (var team in snapshot.Teams)
+            {
+                foreach (var player in team.Players)
+                {
+                    if (player.IsAnonymous || !HasRevealedIdentityShape(player, frame.PlatformRegion))
+                    {
+                        continue;
+                    }
+
+                    if (index >= _historyRosterKeys.Length ||
+                        !string.Equals(_historyRosterKeys[index], player.StableKey, StringComparison.Ordinal))
+                    {
+                        return false;
+                    }
+
+                    index++;
+                    if (index == 10)
+                    {
+                        break;
+                    }
+                }
+
+                if (index == 10)
+                {
+                    break;
+                }
+            }
+
+            return index == _historyRosterKeys.Length;
+        }
+    }
+
+    private static bool HasRevealedIdentityShape(OverlayPlayer player, string? platformRegion)
+    {
+        if (string.IsNullOrWhiteSpace(player.StableKey) || string.IsNullOrWhiteSpace(platformRegion))
+        {
+            return false;
+        }
+
+        var separator = player.DisplayName.LastIndexOf('#');
+        return separator > 0 && separator < player.DisplayName.Length - 1;
+    }
+
+    private Task? CancelHistoricalLookup(bool clearRoster)
+    {
+        CancellationTokenSource? cancellation;
+        Task? task;
+        lock (_historyGate)
+        {
+            cancellation = _historyLookup;
+            task = _historyLookupTask;
+            _historyLookup = null;
+            _historyLookupTask = null;
+
+            if (clearRoster)
+            {
+                _historyRosterKeys = null;
+                _historyRosterRegion = null;
+                _historyRosterQueueId = 0;
+                _historyRosterGameMode = null;
+                _historyRosterGeneration++;
+            }
+        }
+
+        CancelAndDisposeAfterCompletion(cancellation, task);
+        return task;
+    }
+
+    private bool IsCurrentHistoryGeneration(long generation)
+    {
+        lock (_historyGate)
+        {
+            return _historyRosterGeneration == generation;
+        }
+    }
+
+    private static void CancelAndDisposeAfterCompletion(
+        CancellationTokenSource? cancellation,
+        Task? task)
+    {
+        if (cancellation is null)
+        {
+            return;
+        }
+
+        cancellation.Cancel();
+        if (task is null || task.IsCompleted)
+        {
+            cancellation.Dispose();
+            return;
+        }
+
+        _ = task.ContinueWith(
+            static (_, state) => ((CancellationTokenSource)state!).Dispose(),
+            cancellation,
+            CancellationToken.None,
+            TaskContinuationOptions.ExecuteSynchronously,
+            TaskScheduler.Default);
+    }
+
     private void OnOverlayPositionChanged(double left, double top)
     {
         if (_settings is null || _isDemo)
@@ -474,24 +681,21 @@ public partial class App : System.Windows.Application
 
         _settings.Left = left;
         _settings.Top = top;
-        _saveDebounce?.Cancel();
-        _saveDebounce?.Dispose();
-        _saveDebounce = new CancellationTokenSource();
-        var token = _saveDebounce.Token;
-        _ = Task.Run(async () =>
+        QueueSettingsSave(flushImmediately: false);
+    }
+
+    private void QueueSettingsSave(bool flushImmediately)
+    {
+        if (_isDemo || _settings is null || _positionSave is null)
         {
-            try
-            {
-                await Task.Delay(500, token);
-                if (_settingsStore is not null)
-                {
-                    await _settingsStore.SaveAsync(_settings, token);
-                }
-            }
-            catch (OperationCanceledException)
-            {
-            }
-        }, token);
+            return;
+        }
+
+        _positionSave.Signal(AppSettingsSnapshot.Capture(_settings));
+        if (flushImmediately)
+        {
+            _ = _positionSave.FlushAsync();
+        }
     }
 
     private void BeginEndHide()
@@ -504,7 +708,10 @@ public partial class App : System.Windows.Application
             try
             {
                 await Task.Delay(TimeSpan.FromSeconds(15), token);
-                await Dispatcher.InvokeAsync(() => _overlay?.Hide());
+                await Dispatcher.InvokeAsync(
+                    () => _overlay?.Hide(),
+                    System.Windows.Threading.DispatcherPriority.Normal,
+                    token);
             }
             catch (OperationCanceledException)
             {
@@ -524,16 +731,19 @@ public partial class App : System.Windows.Application
         OverlaySnapshot snapshot,
         CancellationToken shutdownToken)
     {
-        CancellationTokenSource? scheduled = null;
         var delay = Timeout.InfiniteTimeSpan;
         OverlayUpdate? update;
         lock (_flushGate)
         {
+            if (shutdownToken.IsCancellationRequested)
+            {
+                return null;
+            }
+
             update = _updateReducer.Offer(snapshot);
             if (update is not null)
             {
-                _flushDelay?.Cancel();
-                _flushDelay = null;
+                _flushTimer?.Change(Timeout.InfiniteTimeSpan, Timeout.InfiniteTimeSpan);
                 _pendingFrame = null;
             }
             else
@@ -542,54 +752,51 @@ public partial class App : System.Windows.Application
                 if (delay != Timeout.InfiniteTimeSpan)
                 {
                     _pendingFrame = frame;
-                    _flushDelay?.Cancel();
-                    scheduled = CancellationTokenSource.CreateLinkedTokenSource(shutdownToken);
-                    _flushDelay = scheduled;
+                    _flushTimer?.Change(delay, Timeout.InfiniteTimeSpan);
                 }
             }
-        }
-
-        if (scheduled is not null)
-        {
-            _ = FlushReducerAfterDelayAsync(delay, scheduled);
         }
 
         return update;
     }
 
-    private async Task FlushReducerAfterDelayAsync(
-        TimeSpan delay,
-        CancellationTokenSource scheduled)
+    private void FlushReducerFromTimer()
     {
+        OverlayUpdate? update;
+        LeagueSessionFrame? frame;
         try
         {
-            await Task.Delay(delay, scheduled.Token).ConfigureAwait(false);
-            OverlayUpdate? update;
-            LeagueSessionFrame? frame;
             lock (_flushGate)
             {
-                if (!ReferenceEquals(_flushDelay, scheduled))
+                if (_shutdown.IsCancellationRequested)
                 {
                     return;
                 }
 
                 update = _updateReducer.Flush();
+                if (update is null)
+                {
+                    var remaining = _updateReducer.DelayUntilFlush;
+                    if (remaining != Timeout.InfiniteTimeSpan)
+                    {
+                        _flushTimer?.Change(remaining, Timeout.InfiniteTimeSpan);
+                    }
+
+                    return;
+                }
+
                 frame = _pendingFrame;
                 _pendingFrame = null;
-                _flushDelay = null;
+                _flushTimer?.Change(Timeout.InfiniteTimeSpan, Timeout.InfiniteTimeSpan);
             }
 
-            if (update is not null && frame is not null)
+            if (frame is not null)
             {
-                await Dispatcher.InvokeAsync(() => ApplyFrame(frame, update));
+                Dispatcher.BeginInvoke(() => ApplyFrame(frame, update));
             }
         }
-        catch (OperationCanceledException) when (scheduled.IsCancellationRequested)
+        catch (InvalidOperationException) when (Dispatcher.HasShutdownStarted)
         {
-        }
-        finally
-        {
-            scheduled.Dispose();
         }
     }
 
@@ -597,9 +804,25 @@ public partial class App : System.Windows.Application
     {
         lock (_flushGate)
         {
-            _flushDelay?.Cancel();
-            _flushDelay = null;
+            _flushTimer?.Change(Timeout.InfiniteTimeSpan, Timeout.InfiniteTimeSpan);
             _pendingFrame = null;
+        }
+    }
+
+    private static void WaitForBackgroundTask(Task? task, TimeSpan timeout)
+    {
+        if (task is null)
+        {
+            return;
+        }
+
+        try
+        {
+            task.Wait(timeout);
+        }
+        catch
+        {
+            // Cancellation and dispatcher shutdown are expected during process teardown.
         }
     }
 }

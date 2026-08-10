@@ -6,6 +6,8 @@ namespace LolPerformanceOverlay.Services;
 public sealed class TrayIconService : IDisposable
 {
     private readonly Forms.NotifyIcon _icon;
+    private readonly Forms.ContextMenuStrip _menu;
+    private readonly DrawingIcon? _ownedIcon;
     private readonly Forms.ToolStripMenuItem _startupItem;
     private readonly Forms.ToolStripMenuItem _positionLockedItem;
 
@@ -24,22 +26,23 @@ public sealed class TrayIconService : IDisposable
         };
         _positionLockedItem.CheckedChanged += PositionLockedItemOnCheckedChanged;
 
-        var menu = new Forms.ContextMenuStrip();
-        menu.Items.Add("顯示／切換", null, (_, _) => CycleRequested?.Invoke());
-        menu.Items.Add("重設 Overlay 位置", null, (_, _) => ResetPositionRequested?.Invoke());
-        menu.Items.Add(_positionLockedItem);
-        menu.Items.Add("設定", null, (_, _) => SettingsRequested?.Invoke());
-        menu.Items.Add(_startupItem);
-        menu.Items.Add(new Forms.ToolStripSeparator());
-        menu.Items.Add("結束", null, (_, _) => ExitRequested?.Invoke());
+        _menu = new Forms.ContextMenuStrip();
+        _menu.Items.Add("顯示／切換", null, (_, _) => CycleRequested?.Invoke());
+        _menu.Items.Add("重設 Overlay 位置", null, (_, _) => ResetPositionRequested?.Invoke());
+        _menu.Items.Add(_positionLockedItem);
+        _menu.Items.Add("設定", null, (_, _) => SettingsRequested?.Invoke());
+        _menu.Items.Add(_startupItem);
+        _menu.Items.Add(new Forms.ToolStripSeparator());
+        _menu.Items.Add("結束", null, (_, _) => ExitRequested?.Invoke());
+
+        _ownedIcon = DrawingIcon.ExtractAssociatedIcon(Environment.ProcessPath!);
 
         _icon = new Forms.NotifyIcon
         {
-            Icon = DrawingIcon.ExtractAssociatedIcon(Environment.ProcessPath!) ??
-                   System.Drawing.SystemIcons.Information,
+            Icon = _ownedIcon ?? System.Drawing.SystemIcons.Information,
             Text = "LoL 即時表現 Overlay",
             Visible = true,
-            ContextMenuStrip = menu
+            ContextMenuStrip = _menu
         };
         _icon.DoubleClick += (_, _) => CycleRequested?.Invoke();
     }
@@ -76,6 +79,8 @@ public sealed class TrayIconService : IDisposable
     {
         _icon.Visible = false;
         _icon.Dispose();
+        _menu.Dispose();
+        _ownedIcon?.Dispose();
     }
 
     private void StartupItemOnCheckedChanged(object? sender, EventArgs e) =>

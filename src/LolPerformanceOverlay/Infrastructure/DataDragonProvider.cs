@@ -9,6 +9,11 @@ namespace LolPerformanceOverlay.Infrastructure;
 
 public sealed class DataDragonProvider : IStaticGameDataProvider, IDisposable
 {
+    private const int MaximumVersionsBytes = 256 * 1024;
+    private const int MaximumStaticJsonBytes = 8 * 1024 * 1024;
+    private const int MaximumChampionCount = 512;
+    private const int MaximumItemCount = 4_096;
+    private static readonly TimeSpan IconFailureBackoff = TimeSpan.FromSeconds(30);
     private static readonly Uri VersionsUrl = DataDragonUri("api/versions.json");
     private readonly string _cacheDirectory;
     private readonly HttpClient _httpClient;
@@ -18,6 +23,8 @@ public sealed class DataDragonProvider : IStaticGameDataProvider, IDisposable
     private readonly ConcurrentDictionary<int, int> _itemGold = new();
     private readonly ConcurrentDictionary<string, byte> _validatedIconPaths =
         new(StringComparer.OrdinalIgnoreCase);
+    private readonly ConcurrentDictionary<string, DateTimeOffset> _iconRetryAfter =
+        new(StringComparer.OrdinalIgnoreCase);
     private string? _version;
 
     public DataDragonProvider()
@@ -26,7 +33,7 @@ public sealed class DataDragonProvider : IStaticGameDataProvider, IDisposable
             Environment.GetFolderPath(Environment.SpecialFolder.LocalApplicationData),
             "LolPerformanceOverlay",
             "cache");
-        _httpClient = new HttpClient
+        _httpClient = new HttpClient(new HttpClientHandler { AllowAutoRedirect = false })
         {
             Timeout = TimeSpan.FromSeconds(10)
         };
@@ -52,11 +59,22 @@ public sealed class DataDragonProvider : IStaticGameDataProvider, IDisposable
         {
             try
             {
-                championJson = await File.ReadAllTextAsync(cacheChampionPath, cancellationToken);
-                itemJson = await File.ReadAllTextAsync(cacheItemPath, cancellationToken);
+                championJson = await ReadBoundedFileAsync(
+                    cacheChampionPath,
+                    MaximumStaticJsonBytes,
+                    cancellationToken);
+                itemJson = await ReadBoundedFileAsync(
+                    cacheItemPath,
+                    MaximumStaticJsonBytes,
+                    cancellationToken);
                 _version = File.Exists(cacheVersionPath)
-                    ? (await File.ReadAllTextAsync(cacheVersionPath, cancellationToken)).Trim()
+                    ? (await ReadBoundedFileAsync(cacheVersionPath, 256, cancellationToken)).Trim()
                     : null;
+                if (!StaticAssetPolicy.IsVersion(_version))
+                {
+                    throw new InvalidDataException("Cached Data Dragon version is invalid.");
+                }
+
                 cachedVersion = _version;
                 StaticDataPayloadValidator.RequireDataObject(championJson, "champion cache");
                 StaticDataPayloadValidator.RequireDataObject(itemJson, "item cache");
@@ -83,26 +101,35 @@ public sealed class DataDragonProvider : IStaticGameDataProvider, IDisposable
 
         try
         {
-            var versionsJson = await _httpClient.GetStringAsync(VersionsUrl, cancellationToken);
-            _version = JsonSerializer.Deserialize<string[]>(versionsJson)?.FirstOrDefault();
-            if (string.IsNullOrWhiteSpace(_version))
+            var versionsJson = await GetBoundedStringAsync(
+                VersionsUrl,
+                MaximumVersionsBytes,
+                cancellationToken);
+            var downloadedVersion = ParseLatestVersion(versionsJson);
+            if (string.IsNullOrWhiteSpace(downloadedVersion) || !StaticAssetPolicy.IsVersion(downloadedVersion))
             {
                 throw new InvalidDataException("Data Dragon did not return a patch version.");
             }
 
-            var downloadedChampionJson = await _httpClient.GetStringAsync(
-                DataDragonUri($"cdn/{_version}/data/zh_TW/champion.json"), cancellationToken);
-            var downloadedItemJson = await _httpClient.GetStringAsync(
-                DataDragonUri($"cdn/{_version}/data/zh_TW/item.json"), cancellationToken);
+            _version = downloadedVersion;
+
+            var downloadedChampionJson = await GetBoundedStringAsync(
+                DataDragonUri($"cdn/{_version}/data/zh_TW/champion.json"),
+                MaximumStaticJsonBytes,
+                cancellationToken);
+            var downloadedItemJson = await GetBoundedStringAsync(
+                DataDragonUri($"cdn/{_version}/data/zh_TW/item.json"),
+                MaximumStaticJsonBytes,
+                cancellationToken);
             StaticDataPayloadValidator.RequireDataObject(downloadedChampionJson, "champion response");
             StaticDataPayloadValidator.RequireDataObject(downloadedItemJson, "item response");
             ReplaceParsedData(downloadedChampionJson, downloadedItemJson);
             championJson = downloadedChampionJson;
             itemJson = downloadedItemJson;
 
-            await AtomicFile.WriteAllTextAsync(cacheChampionPath, championJson, cancellationToken);
-            await AtomicFile.WriteAllTextAsync(cacheItemPath, itemJson, cancellationToken);
-            await AtomicFile.WriteAllTextAsync(cacheVersionPath, _version, cancellationToken);
+            await AtomicFile.WriteAllTextAsync(cacheChampionPath, downloadedChampionJson, cancellationToken);
+            await AtomicFile.WriteAllTextAsync(cacheItemPath, downloadedItemJson, cancellationToken);
+            await AtomicFile.WriteAllTextAsync(cacheVersionPath, downloadedVersion, cancellationToken);
         }
         catch when (!cancellationToken.IsCancellationRequested)
         {
@@ -126,6 +153,11 @@ public sealed class DataDragonProvider : IStaticGameDataProvider, IDisposable
             return byId;
         }
 
+        if (_championsByName.TryGetValue(championName, out var byExactName))
+        {
+            return byExactName;
+        }
+
         var normalized = NormalizeChampionKey(championName);
         if (_championsByName.TryGetValue(normalized, out var byName))
         {
@@ -134,37 +166,74 @@ public sealed class DataDragonProvider : IStaticGameDataProvider, IDisposable
 
         return new ChampionDescriptor(
             championId,
-            string.IsNullOrWhiteSpace(normalized) ? "Unknown" : normalized,
+            "Unknown",
             string.IsNullOrWhiteSpace(championName) ? "未知英雄" : championName,
             [ChampionArchetype.Fighter]);
     }
 
     public int GetItemGoldValue(int itemId) => _itemGold.GetValueOrDefault(itemId);
 
-    public async Task<string?> EnsureChampionIconAsync(
+    public ValueTask<string?> EnsureChampionIconAsync(
         ChampionDescriptor champion,
         CancellationToken cancellationToken)
     {
         if (champion.Key == "Unknown")
         {
+            return ValueTask.FromResult<string?>(null);
+        }
+
+        if (!StaticAssetPolicy.IsChampionKey(champion.Key))
+        {
+            return ValueTask.FromResult<string?>(null);
+        }
+
+        var iconsDirectory = Path.Combine(_cacheDirectory, "icons");
+        if (!StaticAssetPolicy.TryResolveChildPath(
+                iconsDirectory,
+                $"{champion.Key}.png",
+                out var filePath))
+        {
+            return ValueTask.FromResult<string?>(null);
+        }
+
+        // Once this process has validated or atomically written the asset, trust the process-lifetime
+        // cache instead of issuing ten File.Exists calls for every live frame.
+        if (_validatedIconPaths.ContainsKey(filePath))
+        {
+            return ValueTask.FromResult<string?>(filePath);
+        }
+
+        return new ValueTask<string?>(EnsureChampionIconCoreAsync(champion, filePath, cancellationToken));
+    }
+
+    private async Task<string?> EnsureChampionIconCoreAsync(
+        ChampionDescriptor champion,
+        string filePath,
+        CancellationToken cancellationToken)
+    {
+        if (_iconRetryAfter.TryGetValue(filePath, out var retryAfter) && retryAfter > DateTimeOffset.UtcNow)
+        {
             return null;
         }
 
-        var filePath = Path.Combine(_cacheDirectory, "icons", $"{champion.Key}.png");
-        if (_validatedIconPaths.ContainsKey(filePath) && File.Exists(filePath))
+        if (File.Exists(filePath))
         {
-            return filePath;
-        }
+            if (await IsCompletePngAsync(filePath, cancellationToken))
+            {
+                _validatedIconPaths[filePath] = 0;
+                return filePath;
+            }
 
-        if (File.Exists(filePath) && await IsCompletePngAsync(filePath, cancellationToken))
-        {
-            _validatedIconPaths[filePath] = 0;
-            return filePath;
+            if (!TryDeleteInvalidIcon(filePath))
+            {
+                _iconRetryAfter[filePath] = DateTimeOffset.UtcNow + IconFailureBackoff;
+                return null;
+            }
         }
 
         _validatedIconPaths.TryRemove(filePath, out _);
 
-        if (string.IsNullOrWhiteSpace(_version))
+        if (!StaticAssetPolicy.IsVersion(_version))
         {
             return null;
         }
@@ -172,19 +241,24 @@ public sealed class DataDragonProvider : IStaticGameDataProvider, IDisposable
         try
         {
             Directory.CreateDirectory(Path.GetDirectoryName(filePath)!);
-            var bytes = await _httpClient.GetByteArrayAsync(
-                DataDragonUri($"cdn/{_version}/img/champion/{champion.Key}.png"), cancellationToken);
+            var bytes = await GetBoundedBytesAsync(
+                DataDragonUri($"cdn/{_version}/img/champion/{champion.Key}.png"),
+                PngPayloadValidator.MaximumEncodedBytes,
+                cancellationToken);
             if (!PngPayloadValidator.IsComplete(bytes))
             {
+                _iconRetryAfter[filePath] = DateTimeOffset.UtcNow + IconFailureBackoff;
                 return null;
             }
 
             await AtomicFile.WriteAllBytesAsync(filePath, bytes, cancellationToken);
             _validatedIconPaths[filePath] = 0;
+            _iconRetryAfter.TryRemove(filePath, out _);
             return filePath;
         }
         catch when (!cancellationToken.IsCancellationRequested)
         {
+            _iconRetryAfter[filePath] = DateTimeOffset.UtcNow + IconFailureBackoff;
             return null;
         }
     }
@@ -232,6 +306,11 @@ public sealed class DataDragonProvider : IStaticGameDataProvider, IDisposable
     {
         try
         {
+            if (new FileInfo(path).Length > PngPayloadValidator.MaximumEncodedBytes)
+            {
+                return false;
+            }
+
             var bytes = await File.ReadAllBytesAsync(path, cancellationToken);
             return PngPayloadValidator.IsComplete(bytes);
         }
@@ -241,6 +320,21 @@ public sealed class DataDragonProvider : IStaticGameDataProvider, IDisposable
         }
         catch
         {
+            return false;
+        }
+    }
+
+    private static bool TryDeleteInvalidIcon(string path)
+    {
+        try
+        {
+            File.Delete(path);
+            return true;
+        }
+        catch
+        {
+            // The caller enters a bounded retry backoff; a locked corrupt file must not turn into
+            // repeated full-file validation on every live frame.
             return false;
         }
     }
@@ -256,12 +350,23 @@ public sealed class DataDragonProvider : IStaticGameDataProvider, IDisposable
             return;
         }
 
+        var inspectedCount = 0;
         foreach (var property in data.EnumerateObject())
         {
+            if (inspectedCount++ >= MaximumChampionCount)
+            {
+                break;
+            }
+
             var element = property.Value;
             var id = int.TryParse(GetString(element, "key"), out var parsedId) ? parsedId : 0;
             var key = GetString(element, "id") ?? property.Name;
-            var name = GetString(element, "name") ?? key;
+            if (!StaticAssetPolicy.IsChampionKey(key))
+            {
+                continue;
+            }
+            var name = GetString(element, "name");
+            name = string.IsNullOrWhiteSpace(name) || name.Length > 128 ? key : name;
             var tags = element.TryGetProperty("tags", out var tagElement)
                 ? tagElement.EnumerateArray()
                     .Select(tag => ParseArchetype(tag.GetString()))
@@ -290,8 +395,14 @@ public sealed class DataDragonProvider : IStaticGameDataProvider, IDisposable
             return;
         }
 
+        var inspectedCount = 0;
         foreach (var property in data.EnumerateObject())
         {
+            if (inspectedCount++ >= MaximumItemCount)
+            {
+                break;
+            }
+
             if (!int.TryParse(property.Name, out var itemId))
             {
                 continue;
@@ -340,4 +451,90 @@ public sealed class DataDragonProvider : IStaticGameDataProvider, IDisposable
 
     private static string? GetString(JsonElement element, string propertyName) =>
         element.TryGetProperty(propertyName, out var property) ? property.GetString() : null;
+
+    private static string? ParseLatestVersion(string json)
+    {
+        using var document = JsonDocument.Parse(json);
+        if (document.RootElement.ValueKind != JsonValueKind.Array)
+        {
+            return null;
+        }
+
+        foreach (var value in document.RootElement.EnumerateArray())
+        {
+            return value.ValueKind == JsonValueKind.String ? value.GetString() : null;
+        }
+
+        return null;
+    }
+
+    private static async Task<string> ReadBoundedFileAsync(
+        string path,
+        int maximumBytes,
+        CancellationToken cancellationToken)
+    {
+        RequireFileWithinLimit(path, maximumBytes);
+        await using var stream = new FileStream(
+            path,
+            FileMode.Open,
+            FileAccess.Read,
+            FileShare.Read,
+            bufferSize: 16 * 1024,
+            FileOptions.Asynchronous | FileOptions.SequentialScan);
+        return await BoundedStreamReader.ReadUtf8Async(stream, maximumBytes, cancellationToken);
+    }
+
+    private async Task<string> GetBoundedStringAsync(
+        Uri destination,
+        int maximumBytes,
+        CancellationToken cancellationToken)
+    {
+        using var deadline = CancellationTokenSource.CreateLinkedTokenSource(cancellationToken);
+        deadline.CancelAfter(_httpClient.Timeout);
+        var requestToken = deadline.Token;
+        NetworkDestinationPolicy.RequireAllowed(destination, NetworkDestinationPurpose.RuntimeData);
+        using var response = await _httpClient.GetAsync(
+            destination,
+            HttpCompletionOption.ResponseHeadersRead,
+            requestToken);
+        response.EnsureSuccessStatusCode();
+        RequireContentLengthWithinLimit(response.Content.Headers.ContentLength, maximumBytes);
+        await using var stream = await response.Content.ReadAsStreamAsync(requestToken);
+        return await BoundedStreamReader.ReadUtf8Async(stream, maximumBytes, requestToken);
+    }
+
+    private async Task<byte[]> GetBoundedBytesAsync(
+        Uri destination,
+        int maximumBytes,
+        CancellationToken cancellationToken)
+    {
+        using var deadline = CancellationTokenSource.CreateLinkedTokenSource(cancellationToken);
+        deadline.CancelAfter(_httpClient.Timeout);
+        var requestToken = deadline.Token;
+        NetworkDestinationPolicy.RequireAllowed(destination, NetworkDestinationPurpose.RuntimeData);
+        using var response = await _httpClient.GetAsync(
+            destination,
+            HttpCompletionOption.ResponseHeadersRead,
+            requestToken);
+        response.EnsureSuccessStatusCode();
+        RequireContentLengthWithinLimit(response.Content.Headers.ContentLength, maximumBytes);
+        await using var stream = await response.Content.ReadAsStreamAsync(requestToken);
+        return await BoundedStreamReader.ReadBytesAsync(stream, maximumBytes, requestToken);
+    }
+
+    private static void RequireContentLengthWithinLimit(long? contentLength, int maximumBytes)
+    {
+        if (contentLength > maximumBytes)
+        {
+            throw new InvalidDataException($"Static-data response exceeds the {maximumBytes}-byte limit.");
+        }
+    }
+
+    private static void RequireFileWithinLimit(string path, int maximumBytes)
+    {
+        if (new FileInfo(path).Length > maximumBytes)
+        {
+            throw new InvalidDataException($"Static-data cache exceeds the {maximumBytes}-byte limit.");
+        }
+    }
 }

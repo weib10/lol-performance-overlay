@@ -28,13 +28,13 @@ public static class NetworkDestinationPolicy
         return purpose switch
         {
             NetworkDestinationPurpose.RuntimeData =>
-                destination.IsLoopback &&
-                (string.Equals(destination.IdnHost, LoopbackIpv4Host, StringComparison.OrdinalIgnoreCase) ||
-                 string.Equals(destination.IdnHost, LoopbackDnsHost, StringComparison.OrdinalIgnoreCase)) &&
-                (destination.Scheme == Uri.UriSchemeHttp ||
-                 destination.Scheme == Uri.UriSchemeHttps) ||
-                destination.Scheme == Uri.UriSchemeHttps &&
-                string.Equals(destination.IdnHost, DataDragonHost, StringComparison.OrdinalIgnoreCase),
+                (destination.IsLoopback &&
+                 (string.Equals(destination.IdnHost, LoopbackIpv4Host, StringComparison.OrdinalIgnoreCase) ||
+                  string.Equals(destination.IdnHost, LoopbackDnsHost, StringComparison.OrdinalIgnoreCase)) &&
+                 (destination.Scheme == Uri.UriSchemeHttp ||
+                  destination.Scheme == Uri.UriSchemeHttps)) ||
+                (destination.Scheme == Uri.UriSchemeHttps &&
+                 string.Equals(destination.IdnHost, DataDragonHost, StringComparison.OrdinalIgnoreCase)),
             NetworkDestinationPurpose.UserInitiatedBrowser =>
                 destination.Scheme == Uri.UriSchemeHttps &&
                 string.Equals(destination.IdnHost, OpGgHost, StringComparison.OrdinalIgnoreCase),
@@ -47,4 +47,16 @@ public static class NetworkDestinationPolicy
             ? destination
             : throw new InvalidOperationException(
                 $"Network destination is not allowed for {purpose}: {destination.GetLeftPart(UriPartial.Authority)}");
+
+    /// <summary>
+    /// The League loopback APIs use ephemeral self-signed certificates. Certificate bypass is never
+    /// valid for Data Dragon, browser links, alternate loopback addresses, or non-HTTPS requests.
+    /// </summary>
+    public static bool AllowsLoopbackCertificateBypass(Uri? destination) =>
+        destination is not null &&
+        destination.IsAbsoluteUri &&
+        destination.Scheme == Uri.UriSchemeHttps &&
+        destination.IsLoopback &&
+        (string.Equals(destination.IdnHost, LoopbackIpv4Host, StringComparison.OrdinalIgnoreCase) ||
+         string.Equals(destination.IdnHost, LoopbackDnsHost, StringComparison.OrdinalIgnoreCase));
 }

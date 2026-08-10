@@ -55,4 +55,26 @@ public sealed class NetworkDestinationPolicyTests
             new Uri("http://op.gg/"),
             NetworkDestinationPurpose.UserInitiatedBrowser));
     }
+
+    [Theory]
+    [InlineData("https://127.0.0.1:2999/liveclientdata/playerlist", true)]
+    [InlineData("https://localhost:12345/lol-gameflow/v1/gameflow-phase", true)]
+    [InlineData("http://127.0.0.1:2999/liveclientdata/playerlist", false)]
+    [InlineData("https://ddragon.leagueoflegends.com/api/versions.json", false)]
+    [InlineData("https://op.gg/lol/summoners/tw/Synthetic-SAFE", false)]
+    public void CertificateBypassIsConfinedToExactHttpsLoopback(string destination, bool expected) =>
+        Assert.Equal(expected, NetworkDestinationPolicy.AllowsLoopbackCertificateBypass(new Uri(destination)));
+
+    [Fact]
+    public void CertificateBypassRejectsOtherLoopbackAddresses()
+    {
+        var alternateIpv4 = string.Join('.', "127", "0", "0", "2");
+        var destination = new UriBuilder(
+            Uri.UriSchemeHttps,
+            alternateIpv4,
+            2999,
+            "liveclientdata/playerlist").Uri;
+
+        Assert.False(NetworkDestinationPolicy.AllowsLoopbackCertificateBypass(destination));
+    }
 }

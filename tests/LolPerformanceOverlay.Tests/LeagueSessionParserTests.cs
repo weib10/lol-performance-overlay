@@ -84,4 +84,47 @@ public sealed class LeagueSessionParserTests
         Assert.Equal(0, player.Kills);
         Assert.Empty(player.Items);
     }
+
+    [Theory]
+    [InlineData(null)]
+    [InlineData("UNKNOWN_SCHEMA_VALUE")]
+    [InlineData("HIDDEN")]
+    public void ChampSelectIdentityFailsClosedUnlessVisibilityIsExplicitlyVisible(string? visibility)
+    {
+        var visibilityProperty = visibility is null
+            ? string.Empty
+            : $"\"nameVisibilityType\":\"{visibility}\",";
+        var json = $$"""
+            {
+              "myTeam": [{
+                "cellId": 0,
+                "team": 1,
+                {{visibilityProperty}}
+                "puuid": "must-remain-private"
+              }]
+            }
+            """;
+
+        var player = Assert.Single(LeagueSessionParser.ParseChampSelectMembers(json));
+
+        Assert.True(player.IsAnonymous);
+        Assert.Null(player.Puuid);
+    }
+
+    [Fact]
+    public void LivePayloadIsCappedToGameRosterAndInventoryCardinality()
+    {
+        var item = "{\"itemID\":1001,\"count\":1,\"price\":300}";
+        var players = Enumerable.Range(0, 25).Select(index => $$"""
+            {
+              "riotId":"Synthetic {{index}}#SAFE",
+              "team":"ORDER",
+              "items":[{{string.Join(',', Enumerable.Repeat(item, 20))}}]
+            }
+            """);
+        var parsed = LeagueSessionParser.ParseLivePlayers($"[{string.Join(',', players)}]");
+
+        Assert.Equal(10, parsed.Count);
+        Assert.All(parsed, player => Assert.Equal(7, player.Items.Count));
+    }
 }

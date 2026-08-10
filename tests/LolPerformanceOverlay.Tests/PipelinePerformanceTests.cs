@@ -50,7 +50,7 @@ public sealed class PipelinePerformanceTests
             allocated);
 
         Assert.Equal(30, optimizedUpdates);
-        Assert.True(allocated < 128L * 1024 * 1024);
+        Assert.True(allocated < 1L * 1024 * 1024);
     }
 
     [Fact]
@@ -102,6 +102,7 @@ public sealed class PipelinePerformanceTests
 
         Assert.True(retainedOldSnapshots <= 1);
         Assert.True(retainedGrowth < 10L * 1024 * 1024);
+        Assert.True(allocated < 16L * 1024 * 1024);
     }
 
     [Fact]

@@ -1,5 +1,3 @@
-using System.Collections.Concurrent;
-
 namespace LolPerformanceOverlay.Core;
 
 public interface IHistoricalProfileProvider
@@ -74,7 +72,8 @@ public sealed record HistoricalProfileCoordinatorOptions
         TimeSpan freshLifetime,
         TimeSpan staleLifetime,
         int maximumConcurrency = 3,
-        int maximumPlayersPerRequest = 10)
+        int maximumPlayersPerRequest = 10,
+        int maximumCacheEntries = 256)
     {
         if (requestTimeout <= TimeSpan.Zero)
         {
@@ -101,11 +100,17 @@ public sealed record HistoricalProfileCoordinatorOptions
             throw new ArgumentOutOfRangeException(nameof(maximumPlayersPerRequest));
         }
 
+        if (maximumCacheEntries <= 0)
+        {
+            throw new ArgumentOutOfRangeException(nameof(maximumCacheEntries));
+        }
+
         RequestTimeout = requestTimeout;
         FreshLifetime = freshLifetime;
         StaleLifetime = staleLifetime;
         MaximumConcurrency = maximumConcurrency;
         MaximumPlayersPerRequest = maximumPlayersPerRequest;
+        MaximumCacheEntries = maximumCacheEntries;
     }
 
     public TimeSpan RequestTimeout { get; }
@@ -113,6 +118,7 @@ public sealed record HistoricalProfileCoordinatorOptions
     public TimeSpan StaleLifetime { get; }
     public int MaximumConcurrency { get; }
     public int MaximumPlayersPerRequest { get; }
+    public int MaximumCacheEntries { get; }
 
     public static HistoricalProfileCoordinatorOptions Default { get; } = new(
         TimeSpan.FromSeconds(3),
@@ -126,8 +132,11 @@ public sealed class HistoricalProfileCoordinator : IHistoricalProfileProvider, I
     private readonly HistoricalProfileCoordinatorOptions _options;
     private readonly TimeProvider _timeProvider;
     private readonly SemaphoreSlim _concurrency;
-    private readonly ConcurrentDictionary<CacheKey, CacheEntry> _cache = new();
-    private readonly ConcurrentDictionary<CacheKey, InflightRequest> _inflight = new();
+    private readonly ITimer _maintenanceTimer;
+    private readonly object _stateGate = new();
+    private readonly Dictionary<CacheKey, CacheEntry> _cache = new();
+    private readonly Dictionary<CacheKey, InflightRequest> _inflight = new();
+    private long _cacheAccessSequence;
     private bool _disposed;
 
     public HistoricalProfileCoordinator(
@@ -139,6 +148,47 @@ public sealed class HistoricalProfileCoordinator : IHistoricalProfileProvider, I
         _options = options ?? HistoricalProfileCoordinatorOptions.Default;
         _timeProvider = timeProvider ?? TimeProvider.System;
         _concurrency = new SemaphoreSlim(_options.MaximumConcurrency, _options.MaximumConcurrency);
+        var maintenanceInterval = CacheMaintenanceInterval(_options.StaleLifetime);
+        _maintenanceTimer = _timeProvider.CreateTimer(
+            static state => ((HistoricalProfileCoordinator)state!).RunCacheMaintenance(),
+            this,
+            maintenanceInterval,
+            maintenanceInterval);
+    }
+
+    internal int CacheCount
+    {
+        get
+        {
+            lock (_stateGate)
+            {
+                return _cache.Count;
+            }
+        }
+    }
+
+    internal int InflightCount
+    {
+        get
+        {
+            lock (_stateGate)
+            {
+                return _inflight.Count;
+            }
+        }
+    }
+
+    internal void RunCacheMaintenance()
+    {
+        lock (_stateGate)
+        {
+            if (_disposed)
+            {
+                return;
+            }
+
+            RemoveExpiredEntriesUnderLock(_timeProvider.GetUtcNow());
+        }
     }
 
     public async Task<HistoricalProfilesResult> GetProfilesAsync(
@@ -146,7 +196,7 @@ public sealed class HistoricalProfileCoordinator : IHistoricalProfileProvider, I
         HistoricalProfileQuery query,
         CancellationToken cancellationToken)
     {
-        ObjectDisposedException.ThrowIf(_disposed, this);
+        ThrowIfDisposed();
         ArgumentNullException.ThrowIfNull(players);
         ArgumentNullException.ThrowIfNull(query);
         if (players.Count > _options.MaximumPlayersPerRequest)
@@ -170,13 +220,22 @@ public sealed class HistoricalProfileCoordinator : IHistoricalProfileProvider, I
 
     public void Dispose()
     {
-        if (_disposed)
+        _maintenanceTimer.Dispose();
+        InflightRequest[] inflight;
+        lock (_stateGate)
         {
-            return;
+            if (_disposed)
+            {
+                return;
+            }
+
+            _disposed = true;
+            inflight = _inflight.Values.Distinct().ToArray();
+            _inflight.Clear();
+            _cache.Clear();
         }
 
-        _disposed = true;
-        foreach (var request in _inflight.Values)
+        foreach (var request in inflight)
         {
             request.Cancel();
         }
@@ -189,22 +248,30 @@ public sealed class HistoricalProfileCoordinator : IHistoricalProfileProvider, I
     {
         var key = CacheKey.From(player, query.Queue);
         var now = _timeProvider.GetUtcNow();
-        if (_cache.TryGetValue(key, out var cached) && IsFresh(cached.Profile, now))
+        if (TryGetCached(key, now, requireFresh: true, out var cached))
         {
             return HistoricalProfileEntry.WithProfile(player, cached.Availability, cached.Profile);
         }
 
-        var candidate = new InflightRequest(
-            token => FetchAndCacheAsync(key, player, query, token));
-        var inflight = _inflight.GetOrAdd(key, candidate);
-        inflight.AddWaiter();
-        if (ReferenceEquals(candidate, inflight))
+        InflightRequest inflight;
+        var created = false;
+        lock (_stateGate)
+        {
+            ObjectDisposedException.ThrowIf(_disposed, this);
+            if (!_inflight.TryGetValue(key, out inflight!))
+            {
+                inflight = new InflightRequest(
+                    token => FetchAndCacheAsync(key, player, query, token));
+                _inflight.Add(key, inflight);
+                created = true;
+            }
+
+            inflight.AddWaiter();
+        }
+
+        if (created)
         {
             _ = RemoveCompletedInflightAsync(key, inflight);
-        }
-        else
-        {
-            candidate.Dispose();
         }
 
         HistoricalProfileTransportResult fetched;
@@ -214,15 +281,9 @@ public sealed class HistoricalProfileCoordinator : IHistoricalProfileProvider, I
         }
         finally
         {
-            var remainingWaiters = inflight.RemoveWaiter();
-            if (remainingWaiters == 0 && !inflight.Task.IsCompleted)
+            if (ReleaseWaiter(key, inflight))
             {
-                RemoveInflight(key, inflight);
                 inflight.Cancel();
-            }
-            else if (inflight.Task.IsCompleted)
-            {
-                RemoveInflight(key, inflight);
             }
         }
 
@@ -246,7 +307,7 @@ public sealed class HistoricalProfileCoordinator : IHistoricalProfileProvider, I
         }
 
         now = _timeProvider.GetUtcNow();
-        if (query.AllowStale && _cache.TryGetValue(key, out cached) && IsWithinStaleLifetime(cached.Profile, now))
+        if (query.AllowStale && TryGetCached(key, now, requireFresh: false, out cached))
         {
             return HistoricalProfileEntry.WithProfile(
                 player,
@@ -274,7 +335,9 @@ public sealed class HistoricalProfileCoordinator : IHistoricalProfileProvider, I
             await _concurrency.WaitAsync(linked.Token).ConfigureAwait(false);
             lockTaken = true;
             var result = await _transport.FetchAsync(player, query, linked.Token).ConfigureAwait(false);
-            if (!IsValid(result, query, _timeProvider.GetUtcNow()))
+            var now = _timeProvider.GetUtcNow();
+            if (!IsValid(result, query, now) ||
+                result.Profile is not null && !IsWithinStaleLifetime(result.Profile, now))
             {
                 return HistoricalProfileTransportResult.Failure(
                     HistoricalProfileAvailability.Malformed,
@@ -284,8 +347,8 @@ public sealed class HistoricalProfileCoordinator : IHistoricalProfileProvider, I
             if (result.Profile is not null &&
                 result.Availability is HistoricalProfileAvailability.Available or HistoricalProfileAvailability.Partial)
             {
-                _cache[key] = new CacheEntry(result.Availability, result.Profile);
-                if (!IsFresh(result.Profile, _timeProvider.GetUtcNow()))
+                StoreCached(key, result.Availability, result.Profile);
+                if (!IsFresh(result.Profile, now))
                 {
                     return HistoricalProfileTransportResult.WithProfile(
                         HistoricalProfileAvailability.Stale,
@@ -346,9 +409,134 @@ public sealed class HistoricalProfileCoordinator : IHistoricalProfileProvider, I
 
     private void RemoveInflight(
         CacheKey key,
-        InflightRequest inflight) =>
-        ((ICollection<KeyValuePair<CacheKey, InflightRequest>>)_inflight)
-            .Remove(new KeyValuePair<CacheKey, InflightRequest>(key, inflight));
+        InflightRequest inflight)
+    {
+        lock (_stateGate)
+        {
+            if (_inflight.TryGetValue(key, out var current) && ReferenceEquals(current, inflight))
+            {
+                _inflight.Remove(key);
+            }
+        }
+    }
+
+    private bool ReleaseWaiter(CacheKey key, InflightRequest inflight)
+    {
+        lock (_stateGate)
+        {
+            var remainingWaiters = inflight.RemoveWaiter();
+            if (remainingWaiters < 0)
+            {
+                throw new InvalidOperationException("Historical request waiter count became negative.");
+            }
+
+            var completed = inflight.Task.IsCompleted;
+            if ((remainingWaiters == 0 || completed) &&
+                _inflight.TryGetValue(key, out var current) &&
+                ReferenceEquals(current, inflight))
+            {
+                _inflight.Remove(key);
+            }
+
+            // Removal and the zero-waiter decision share the same lock used by new callers,
+            // so nobody can attach to this request after we decide to cancel it.
+            return remainingWaiters == 0 && !completed;
+        }
+    }
+
+    private bool TryGetCached(
+        CacheKey key,
+        DateTimeOffset now,
+        bool requireFresh,
+        out CacheEntry entry)
+    {
+        lock (_stateGate)
+        {
+            if (!_cache.TryGetValue(key, out entry!))
+            {
+                return false;
+            }
+
+            if (!IsWithinStaleLifetime(entry.Profile, now))
+            {
+                _cache.Remove(key);
+                entry = null!;
+                return false;
+            }
+
+            if (requireFresh && !IsFresh(entry.Profile, now))
+            {
+                return false;
+            }
+
+            entry.LastAccess = ++_cacheAccessSequence;
+            return true;
+        }
+    }
+
+    private void StoreCached(
+        CacheKey key,
+        HistoricalProfileAvailability availability,
+        HistoricalProfile profile)
+    {
+        lock (_stateGate)
+        {
+            if (_disposed)
+            {
+                return;
+            }
+
+            var now = _timeProvider.GetUtcNow();
+            RemoveExpiredEntriesUnderLock(now);
+            _cache[key] = new CacheEntry(availability, profile, ++_cacheAccessSequence);
+            while (_cache.Count > _options.MaximumCacheEntries)
+            {
+                var leastRecentlyUsed = _cache.MinBy(entry => entry.Value.LastAccess).Key;
+                _cache.Remove(leastRecentlyUsed);
+            }
+        }
+    }
+
+    private void RemoveExpiredEntriesUnderLock(DateTimeOffset now)
+    {
+        if (_cache.Count == 0)
+        {
+            return;
+        }
+
+        List<CacheKey>? expiredKeys = null;
+        foreach (var entry in _cache)
+        {
+            if (!IsWithinStaleLifetime(entry.Value.Profile, now))
+            {
+                (expiredKeys ??= []).Add(entry.Key);
+            }
+        }
+
+        if (expiredKeys is null)
+        {
+            return;
+        }
+
+        foreach (var key in expiredKeys)
+        {
+            _cache.Remove(key);
+        }
+    }
+
+    private void ThrowIfDisposed()
+    {
+        lock (_stateGate)
+        {
+            ObjectDisposedException.ThrowIf(_disposed, this);
+        }
+    }
+
+    private static TimeSpan CacheMaintenanceInterval(TimeSpan staleLifetime)
+    {
+        var halfLifetimeTicks = Math.Max(staleLifetime.Ticks / 2, TimeSpan.FromSeconds(1).Ticks);
+        return TimeSpan.FromTicks(Math.Min(halfLifetimeTicks, TimeSpan.FromMinutes(5).Ticks));
+    }
 
     private bool IsFresh(HistoricalProfile profile, DateTimeOffset now) =>
         profile.FetchedAt <= now + TimeSpan.FromMinutes(5) && now - profile.FetchedAt <= _options.FreshLifetime;
@@ -377,6 +565,12 @@ public sealed class HistoricalProfileCoordinator : IHistoricalProfileProvider, I
             HistoricalProfileAvailability.Partial or HistoricalProfileAvailability.Stale) ||
             profile.Queue.QueueId != query.Queue.QueueId ||
             !string.Equals(profile.Queue.Mode, query.Queue.Mode, StringComparison.OrdinalIgnoreCase) ||
+            profile.OfficialRank is not null &&
+            (profile.OfficialRank.Queue.QueueId != profile.Queue.QueueId ||
+             !string.Equals(
+                 profile.OfficialRank.Queue.Mode,
+                 profile.Queue.Mode,
+                 StringComparison.OrdinalIgnoreCase)) ||
             profile.FetchedAt > now + TimeSpan.FromMinutes(5) ||
             profile.Source.Kind == HistoricalSourceKind.None ||
             profile.CommonChampions.Any(champion => champion.SampleCount > profile.SampleCount) ||
@@ -404,8 +598,6 @@ public sealed class HistoricalProfileCoordinator : IHistoricalProfileProvider, I
 
     private readonly record struct CacheKey(
         string StableKey,
-        string GameName,
-        string TagLine,
         string Region,
         int QueueId,
         string Mode)
@@ -413,16 +605,27 @@ public sealed class HistoricalProfileCoordinator : IHistoricalProfileProvider, I
         public static CacheKey From(RevealedPlayerIdentity player, HistoricalQueue queue) =>
             new(
                 player.StableKey,
-                player.GameName,
-                player.TagLine,
                 player.Region,
                 queue.QueueId,
-                queue.Mode.ToUpperInvariant());
+                queue.Mode);
     }
 
-    private sealed record CacheEntry(
-        HistoricalProfileAvailability Availability,
-        HistoricalProfile Profile);
+    private sealed class CacheEntry
+    {
+        public CacheEntry(
+            HistoricalProfileAvailability availability,
+            HistoricalProfile profile,
+            long lastAccess)
+        {
+            Availability = availability;
+            Profile = profile;
+            LastAccess = lastAccess;
+        }
+
+        public HistoricalProfileAvailability Availability { get; }
+        public HistoricalProfile Profile { get; }
+        public long LastAccess { get; set; }
+    }
 
     private sealed class InflightRequest : IDisposable
     {

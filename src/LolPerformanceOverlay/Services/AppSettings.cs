@@ -26,8 +26,40 @@ public sealed class AppSettings
         };
 }
 
+internal readonly record struct AppSettingsSnapshot(
+    double Left,
+    double Top,
+    double Opacity,
+    bool StartWithWindows,
+    bool PositionLocked,
+    string Hotkey)
+{
+    public static AppSettingsSnapshot Capture(AppSettings settings)
+    {
+        ArgumentNullException.ThrowIfNull(settings);
+        return new AppSettingsSnapshot(
+            settings.Left,
+            settings.Top,
+            settings.Opacity,
+            settings.StartWithWindows,
+            settings.PositionLocked,
+            settings.Hotkey);
+    }
+
+    public AppSettings ToSettings() => new()
+    {
+        Left = Left,
+        Top = Top,
+        Opacity = Opacity,
+        StartWithWindows = StartWithWindows,
+        PositionLocked = PositionLocked,
+        Hotkey = Hotkey
+    };
+}
+
 public sealed class SettingsStore
 {
+    private const int MaximumSettingsCharacters = 64 * 1024;
     internal static readonly JsonSerializerOptions JsonOptions = new()
     {
         WriteIndented = true,
@@ -59,7 +91,23 @@ public sealed class SettingsStore
                 return new AppSettings();
             }
 
-            var settings = JsonSerializer.Deserialize<AppSettings>(File.ReadAllText(_path), JsonOptions) ??
+            if (new FileInfo(_path).Length > MaximumSettingsCharacters)
+            {
+                return new AppSettings();
+            }
+
+            using var stream = new FileStream(_path, FileMode.Open, FileAccess.Read, FileShare.Read);
+            using var reader = new StreamReader(stream);
+            var buffer = new char[MaximumSettingsCharacters + 1];
+            var length = reader.ReadBlock(buffer, 0, buffer.Length);
+            if (length > MaximumSettingsCharacters || reader.Peek() >= 0)
+            {
+                return new AppSettings();
+            }
+
+            var settings = JsonSerializer.Deserialize<AppSettings>(
+                               new string(buffer, 0, length),
+                               JsonOptions) ??
                            new AppSettings();
             settings.Left = double.IsFinite(settings.Left) ? settings.Left : double.NaN;
             settings.Top = double.IsFinite(settings.Top) ? settings.Top : double.NaN;
@@ -77,13 +125,14 @@ public sealed class SettingsStore
         }
     }
 
-    public async Task SaveAsync(AppSettings settings, CancellationToken cancellationToken = default)
+    internal async Task SaveAsync(
+        AppSettingsSnapshot settings,
+        CancellationToken cancellationToken = default)
     {
-        ArgumentNullException.ThrowIfNull(settings);
         var lockTaken = false;
         try
         {
-            var serialized = JsonSerializer.Serialize(settings.Clone(), JsonOptions);
+            var serialized = JsonSerializer.Serialize(settings.ToSettings(), JsonOptions);
             await _saveGate.WaitAsync(cancellationToken).ConfigureAwait(false);
             lockTaken = true;
             await AtomicFile.WriteAllTextAsync(_path, serialized, cancellationToken).ConfigureAwait(false);

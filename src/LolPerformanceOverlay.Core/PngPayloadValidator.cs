@@ -10,12 +10,15 @@ namespace LolPerformanceOverlay.Core;
 /// </summary>
 public static class PngPayloadValidator
 {
-    private const long MaximumDecodedBytes = 256L * 1024 * 1024;
+    public const int MaximumEncodedBytes = 2 * 1024 * 1024;
+    private const int MaximumDimension = 512;
+    private const long MaximumDecodedBytes = 4L * 1024 * 1024;
     private static ReadOnlySpan<byte> Signature => [137, 80, 78, 71, 13, 10, 26, 10];
 
     public static bool IsComplete(ReadOnlySpan<byte> payload)
     {
-        if (payload.Length < Signature.Length || !payload[..Signature.Length].SequenceEqual(Signature))
+        if (payload.Length < Signature.Length || payload.Length > MaximumEncodedBytes ||
+            !payload[..Signature.Length].SequenceEqual(Signature))
         {
             return false;
         }
@@ -48,7 +51,7 @@ public static class PngPayloadValidator
         var width = 0;
         var height = 0;
         var bitsPerPixel = 0;
-        using var compressedPixels = new MemoryStream();
+        using var compressedPixels = new MemoryStream(Math.Min(payload.Length, MaximumEncodedBytes));
 
         while (offset <= payload.Length - 12)
         {
@@ -104,7 +107,7 @@ public static class PngPayloadValidator
                 }
 
                 sawImageData = true;
-                if (compressedPixels.Length + chunkLength > MaximumDecodedBytes)
+                if (compressedPixels.Length + chunkLength > MaximumEncodedBytes)
                 {
                     return false;
                 }
@@ -119,8 +122,9 @@ public static class PngPayloadValidator
                     return false;
                 }
 
+                compressedPixels.Position = 0;
                 return ValidateDecompressedPixels(
-                    compressedPixels.ToArray(),
+                    compressedPixels,
                     width,
                     height,
                     bitsPerPixel);
@@ -151,7 +155,9 @@ public static class PngPayloadValidator
         var bitDepth = data[8];
         var colorType = data[9];
         bitsPerPixel = BitsPerPixel(bitDepth, colorType);
-        return width > 0 && height > 0 && bitsPerPixel > 0 &&
+        return width is > 0 and <= MaximumDimension &&
+               height is > 0 and <= MaximumDimension &&
+               bitsPerPixel > 0 &&
                data[10] == 0 && data[11] == 0 && data[12] == 0;
     }
 
@@ -170,7 +176,7 @@ public static class PngPayloadValidator
     }
 
     private static bool ValidateDecompressedPixels(
-        byte[] compressed,
+        Stream compressed,
         int width,
         int height,
         int bitsPerPixel)
@@ -182,8 +188,7 @@ public static class PngPayloadValidator
             return false;
         }
 
-        using var input = new MemoryStream(compressed, writable: false);
-        using var zlib = new ZLibStream(input, CompressionMode.Decompress);
+        using var zlib = new ZLibStream(compressed, CompressionMode.Decompress, leaveOpen: true);
         var buffer = new byte[8192];
         var decodedLength = 0L;
         var positionInRow = 0L;

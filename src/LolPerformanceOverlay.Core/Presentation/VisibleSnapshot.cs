@@ -77,6 +77,10 @@ public sealed record OverlaySnapshotDiff(
 /// </summary>
 public static class VisibleSnapshot
 {
+    internal static bool VisibleEquals(OverlaySnapshot left, OverlaySnapshot right) =>
+        DiffSnapshotFields(left, right) == OverlaySnapshotFields.None &&
+        TeamsVisibleEqual(left.Teams, right.Teams);
+
     public static OverlaySnapshotDiff Diff(OverlaySnapshot? previous, OverlaySnapshot current)
     {
         ArgumentNullException.ThrowIfNull(current);
@@ -116,9 +120,16 @@ public static class VisibleSnapshot
             return current;
         }
 
-        if (!Diff(previous, current).HasChanges)
+        var snapshotFields = DiffSnapshotFields(previous, current);
+        var teamsVisibleEqual = TeamsVisibleEqual(previous.Teams, current.Teams);
+        if (snapshotFields == OverlaySnapshotFields.None && teamsVisibleEqual)
         {
             return previous;
+        }
+
+        if (teamsVisibleEqual)
+        {
+            return current with { Teams = previous.Teams };
         }
 
         var previousTeams = ToMap(previous.Teams, team => team.Team);
@@ -400,16 +411,37 @@ public static class VisibleSnapshot
     private static bool TextEquals(string? left, string? right) =>
         string.Equals(left, right, StringComparison.Ordinal);
 
-    private static void AddIf<T>(bool condition, T field, ref T fields)
-        where T : struct, Enum
+    private static void AddIf(
+        bool condition,
+        OverlaySnapshotFields field,
+        ref OverlaySnapshotFields fields)
     {
-        if (!condition)
+        if (condition)
         {
-            return;
+            fields |= field;
         }
+    }
 
-        var combined = Convert.ToUInt64(fields) | Convert.ToUInt64(field);
-        fields = (T)Enum.ToObject(typeof(T), combined);
+    private static void AddIf(
+        bool condition,
+        OverlayTeamFields field,
+        ref OverlayTeamFields fields)
+    {
+        if (condition)
+        {
+            fields |= field;
+        }
+    }
+
+    private static void AddIf(
+        bool condition,
+        OverlayPlayerFields field,
+        ref OverlayPlayerFields fields)
+    {
+        if (condition)
+        {
+            fields |= field;
+        }
     }
 }
 
@@ -446,13 +478,20 @@ public sealed class OverlayUpdateReducer
         ArgumentNullException.ThrowIfNull(snapshot);
         lock (_gate)
         {
-            _latest = VisibleSnapshot.Merge(_latest, snapshot);
+            var previousLatest = _latest;
+            _latest = VisibleSnapshot.Merge(previousLatest, snapshot);
             if (_lastPresented is null)
             {
                 return Present(_latest);
             }
 
-            if (!VisibleSnapshot.Diff(_lastPresented, _latest).HasChanges)
+            if (ReferenceEquals(_lastPresented, _latest))
+            {
+                return null;
+            }
+
+            if (!ReferenceEquals(previousLatest, _lastPresented) &&
+                VisibleSnapshot.VisibleEquals(_lastPresented, _latest))
             {
                 _latest = _lastPresented;
                 return null;
@@ -466,14 +505,13 @@ public sealed class OverlayUpdateReducer
     {
         lock (_gate)
         {
-            if (_lastPresented is null || _latest is null || !IsDue())
+            if (_lastPresented is null || _latest is null ||
+                ReferenceEquals(_lastPresented, _latest) || !IsDue())
             {
                 return null;
             }
 
-            return VisibleSnapshot.Diff(_lastPresented, _latest).HasChanges
-                ? Present(_latest)
-                : null;
+            return Present(_latest);
         }
     }
 
@@ -484,7 +522,7 @@ public sealed class OverlayUpdateReducer
             lock (_gate)
             {
                 if (_lastPresented is null || _latest is null ||
-                    !VisibleSnapshot.Diff(_lastPresented, _latest).HasChanges)
+                    ReferenceEquals(_lastPresented, _latest))
                 {
                     return Timeout.InfiniteTimeSpan;
                 }

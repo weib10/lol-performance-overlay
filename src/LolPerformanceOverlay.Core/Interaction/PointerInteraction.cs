@@ -10,35 +10,88 @@ public readonly record struct DipPoint(double X, double Y)
     }
 }
 
-public abstract record PointerInput;
+public enum PointerActionKind
+{
+    CapturePointer,
+    ReleasePointer,
+    Click,
+    BeginDrag,
+    DragTo,
+    EndDrag,
+    CancelGesture
+}
 
-public sealed record PointerDown(DipPoint Position) : PointerInput;
+public readonly record struct PointerAction(
+    PointerActionKind Kind,
+    DipPoint Origin = default,
+    DipPoint Position = default,
+    PointerCancellationReason Reason = default);
 
-public sealed record PointerMove(DipPoint Position) : PointerInput;
+/// <summary>
+/// A fixed-size value batch. Pointer moves never allocate an input object, action object, array, or
+/// iterator on the drag hot path.
+/// </summary>
+public readonly struct PointerActionBatch
+{
+    private readonly PointerAction _first;
+    private readonly PointerAction _second;
+    private readonly PointerAction _third;
 
-public sealed record PointerUp(DipPoint Position) : PointerInput;
+    private PointerActionBatch(
+        int count,
+        PointerAction first,
+        PointerAction second = default,
+        PointerAction third = default)
+    {
+        Count = count;
+        _first = first;
+        _second = second;
+        _third = third;
+    }
 
-public sealed record PointerCancel : PointerInput;
+    public int Count { get; }
 
-public sealed record PointerLostCapture : PointerInput;
+    public PointerAction this[int index] => index switch
+    {
+        0 when Count > 0 => _first,
+        1 when Count > 1 => _second,
+        2 when Count > 2 => _third,
+        _ => throw new ArgumentOutOfRangeException(nameof(index))
+    };
 
-public sealed record PositionLockChanged(bool IsLocked) : PointerInput;
+    public Enumerator GetEnumerator() => new(this);
 
-public abstract record PointerAction;
+    internal static PointerActionBatch One(PointerAction first) => new(1, first);
 
-public sealed record CapturePointer : PointerAction;
+    internal static PointerActionBatch Two(PointerAction first, PointerAction second) =>
+        new(2, first, second);
 
-public sealed record ReleasePointer : PointerAction;
+    internal static PointerActionBatch Three(
+        PointerAction first,
+        PointerAction second,
+        PointerAction third) =>
+        new(3, first, second, third);
 
-public sealed record Click(DipPoint Position) : PointerAction;
+    public struct Enumerator
+    {
+        private readonly PointerActionBatch _batch;
+        private int _index;
 
-public sealed record BeginDrag(DipPoint Origin, DipPoint Position) : PointerAction;
+        internal Enumerator(PointerActionBatch batch)
+        {
+            _batch = batch;
+            _index = -1;
+        }
 
-public sealed record DragTo(DipPoint Position) : PointerAction;
+        public PointerAction Current => _batch[_index];
 
-public sealed record EndDrag(DipPoint Position) : PointerAction;
-
-public sealed record CancelGesture(PointerCancellationReason Reason) : PointerAction;
+        public bool MoveNext()
+        {
+            _index++;
+            return _index < _batch.Count;
+        }
+    }
+}
 
 public enum PointerCancellationReason
 {
@@ -57,11 +110,10 @@ public enum PointerInteractionState
 
 /// <summary>
 /// Converts pointer input in device-independent pixels into mutually exclusive click and drag actions.
-/// A pointer must remain captured from <see cref="CapturePointer"/> until release or cancellation.
+/// A pointer remains captured until release or cancellation.
 /// </summary>
 public sealed class PointerInteractionStateMachine
 {
-    private static readonly IReadOnlyList<PointerAction> NoActions = Array.Empty<PointerAction>();
     private readonly double _dragThresholdSquared;
     private DipPoint _origin;
 
@@ -79,104 +131,103 @@ public sealed class PointerInteractionStateMachine
 
     public bool IsPositionLocked { get; private set; }
 
-    public IReadOnlyList<PointerAction> Handle(PointerInput input)
-    {
-        ArgumentNullException.ThrowIfNull(input);
-        return input switch
-        {
-            PointerDown down => HandleDown(down),
-            PointerMove move => HandleMove(move),
-            PointerUp up => HandleUp(up),
-            PointerCancel => Cancel(PointerCancellationReason.Cancelled, releaseCapture: true),
-            PointerLostCapture => Cancel(PointerCancellationReason.LostCapture, releaseCapture: false),
-            PositionLockChanged changed => HandleLockChanged(changed),
-            _ => throw new ArgumentOutOfRangeException(nameof(input))
-        };
-    }
-
-    private IReadOnlyList<PointerAction> HandleDown(PointerDown input)
+    public PointerActionBatch HandleDown(DipPoint position)
     {
         if (IsPositionLocked)
         {
-            return NoActions;
+            return default;
         }
 
-        _origin = input.Position;
+        _origin = position;
         if (State == PointerInteractionState.Idle)
         {
             State = PointerInteractionState.Pressed;
-            return [new CapturePointer()];
+            return PointerActionBatch.One(new PointerAction(PointerActionKind.CapturePointer));
         }
 
         State = PointerInteractionState.Pressed;
-        return
-        [
-            new CancelGesture(PointerCancellationReason.Interrupted),
-            new ReleasePointer(),
-            new CapturePointer()
-        ];
+        return PointerActionBatch.Three(
+            new PointerAction(
+                PointerActionKind.CancelGesture,
+                Reason: PointerCancellationReason.Interrupted),
+            new PointerAction(PointerActionKind.ReleasePointer),
+            new PointerAction(PointerActionKind.CapturePointer));
     }
 
-    private IReadOnlyList<PointerAction> HandleMove(PointerMove input)
+    public PointerActionBatch HandleMove(DipPoint position)
     {
         if (State == PointerInteractionState.Idle || IsPositionLocked)
         {
-            return NoActions;
+            return default;
         }
 
         if (State == PointerInteractionState.Pressed)
         {
-            if (_origin.DistanceSquaredTo(input.Position) <= _dragThresholdSquared)
+            if (_origin.DistanceSquaredTo(position) <= _dragThresholdSquared)
             {
-                return NoActions;
+                return default;
             }
 
             State = PointerInteractionState.Dragging;
-            return [new BeginDrag(_origin, input.Position)];
+            return PointerActionBatch.One(new PointerAction(
+                PointerActionKind.BeginDrag,
+                _origin,
+                position));
         }
 
-        return [new DragTo(input.Position)];
+        return PointerActionBatch.One(new PointerAction(PointerActionKind.DragTo, Position: position));
     }
 
-    private IReadOnlyList<PointerAction> HandleUp(PointerUp input)
+    public PointerActionBatch HandleUp(DipPoint position)
     {
         var previousState = State;
         if (previousState == PointerInteractionState.Idle)
         {
-            return NoActions;
+            return default;
         }
 
         State = PointerInteractionState.Idle;
         return previousState == PointerInteractionState.Dragging
-            ? [new EndDrag(input.Position), new ReleasePointer()]
-            : [new Click(input.Position), new ReleasePointer()];
+            ? PointerActionBatch.Two(
+                new PointerAction(PointerActionKind.EndDrag, Position: position),
+                new PointerAction(PointerActionKind.ReleasePointer))
+            : PointerActionBatch.Two(
+                new PointerAction(PointerActionKind.Click, Position: position),
+                new PointerAction(PointerActionKind.ReleasePointer));
     }
 
-    private IReadOnlyList<PointerAction> HandleLockChanged(PositionLockChanged input)
+    public PointerActionBatch HandleCancel() =>
+        Cancel(PointerCancellationReason.Cancelled, releaseCapture: true);
+
+    public PointerActionBatch HandleLostCapture() =>
+        Cancel(PointerCancellationReason.LostCapture, releaseCapture: false);
+
+    public PointerActionBatch HandlePositionLock(bool isLocked)
     {
-        if (input.IsLocked == IsPositionLocked)
+        if (isLocked == IsPositionLocked)
         {
-            return NoActions;
+            return default;
         }
 
-        IsPositionLocked = input.IsLocked;
-        return input.IsLocked && State != PointerInteractionState.Idle
+        IsPositionLocked = isLocked;
+        return isLocked && State != PointerInteractionState.Idle
             ? Cancel(PointerCancellationReason.PositionLocked, releaseCapture: true)
-            : NoActions;
+            : default;
     }
 
-    private IReadOnlyList<PointerAction> Cancel(
+    private PointerActionBatch Cancel(
         PointerCancellationReason reason,
         bool releaseCapture)
     {
         if (State == PointerInteractionState.Idle)
         {
-            return NoActions;
+            return default;
         }
 
         State = PointerInteractionState.Idle;
+        var cancel = new PointerAction(PointerActionKind.CancelGesture, Reason: reason);
         return releaseCapture
-            ? [new CancelGesture(reason), new ReleasePointer()]
-            : [new CancelGesture(reason)];
+            ? PointerActionBatch.Two(cancel, new PointerAction(PointerActionKind.ReleasePointer))
+            : PointerActionBatch.One(cancel);
     }
 }

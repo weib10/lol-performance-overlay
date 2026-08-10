@@ -10,6 +10,7 @@ Linux cross-build 成功只能證明程式與 Windows targeting toolchain 相容
 
 - `127.0.0.1`／`localhost`：唯讀取得同一台電腦上的 League Client 階段、選角與本場即時資料。
 - `https://ddragon.leagueoflegends.com`：下載 Riot 公開的英雄／物品靜態資料與圖示。
+- League Client 的自簽 TLS 憑證只在 request URI 仍是精確 loopback host 時略過驗證；這組 client 禁止 redirect，不能拿來連任意遠端 HTTPS host。Data Dragon client 也禁止 redirect，所有 runtime URI 都先經 allowlist。
 - OP.GG 只可由使用者主動交給預設瀏覽器開啟；程式不自動抓取、解析頁面或讀取 browser cookie／session。
 - 沒有玩家資料上傳、遙測、廣告或本工具自己的遠端服務。
 - League Client 臨時本機通行資訊不寫入硬碟或 log。
@@ -25,6 +26,7 @@ Repository 內的共用 PackageBuilder 會在建立 ZIP 前失敗攔截：
 - 真實人物樣式的 fixture Riot ID、開發者本機絕對路徑與 PDB 路徑。
 - 原始對局欄位進入 Overlay snapshot／view model。
 - 程式碼或朋友文件出現不在 allowlist 的 URL host。
+- shipping source 出現遊戲 process memory read/write、remote thread／DLL injection、Windows/game hook、DirectX injection、driver I/O 或自動鍵鼠輸入能力。
 - HTML 從遠端載入圖片、script、stylesheet、frame 或媒體。
 - ZIP 不是恰好只含 EXE 與 HTML，或 publish 不是單一 EXE。
 

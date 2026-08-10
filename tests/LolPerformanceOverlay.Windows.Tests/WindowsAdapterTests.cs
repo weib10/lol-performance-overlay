@@ -1,13 +1,29 @@
 using System.Reflection;
 using System.IO;
+using LolPerformanceOverlay.Core;
 using LolPerformanceOverlay.Services;
 using LolPerformanceOverlay.UI;
+using LolPerformanceOverlay.Infrastructure;
 using Xunit;
 
 namespace LolPerformanceOverlay.Windows.Tests;
 
 public sealed class WindowsAdapterTests
 {
+    [Fact]
+    public async Task DisposingSessionSourceCancelsInflightEnumerationWithoutExternalToken()
+    {
+        var source = new LeagueSessionSource(new NullStaticGameDataProvider());
+        await using var frames = source.WatchAsync(CancellationToken.None).GetAsyncEnumerator();
+        Assert.True(await frames.MoveNextAsync().AsTask().WaitAsync(TimeSpan.FromSeconds(5)));
+        var inFlightMove = frames.MoveNextAsync().AsTask();
+        await Task.Delay(20);
+
+        await source.DisposeAsync();
+
+        Assert.False(await inFlightMove.WaitAsync(TimeSpan.FromSeconds(1)));
+    }
+
     [Fact]
     public async Task SettingsStoreRoundTripsDefaultCoordinatesAndUserChoices()
     {
@@ -23,7 +39,7 @@ public sealed class WindowsAdapterTests
                 Hotkey = "Alt+Shift+L"
             };
 
-            await store.SaveAsync(original);
+            await store.SaveAsync(AppSettingsSnapshot.Capture(original));
             var restored = store.Load();
 
             Assert.True(double.IsNaN(restored.Left));
@@ -65,6 +81,43 @@ public sealed class WindowsAdapterTests
     }
 
     [Fact]
+    public void OversizedSettingsAndLockfilesAreRejectedWithoutParsing()
+    {
+        var directory = Path.Combine(Path.GetTempPath(), $"lol-overlay-bounds-{Guid.NewGuid():N}");
+        var settingsPath = Path.Combine(directory, "settings.json");
+        var lockfilePath = Path.Combine(directory, "lockfile");
+        try
+        {
+            Directory.CreateDirectory(directory);
+            File.WriteAllText(settingsPath, new string('x', 70 * 1024));
+            File.WriteAllText(lockfilePath, new string('x', 4_097));
+
+            var settings = new SettingsStore(settingsPath).Load();
+
+            Assert.True(double.IsNaN(settings.Left));
+            Assert.Null(LeagueClientDiscovery.ParseLockfile(lockfilePath));
+        }
+        finally
+        {
+            if (Directory.Exists(directory))
+            {
+                Directory.Delete(directory, recursive: true);
+            }
+        }
+    }
+
+    [Fact]
+    public void UnknownChampionNamesCannotBecomeAssetKeysOrPaths()
+    {
+        using var provider = new DataDragonProvider();
+
+        var descriptor = provider.ResolveChampion("../synthetic-unknown");
+
+        Assert.Equal("Unknown", descriptor.Key);
+        Assert.Equal("../synthetic-unknown", descriptor.Name);
+    }
+
+    [Fact]
     public async Task ChampionBitmapIsDecodedOncePerPath()
     {
         var path = Path.Combine(Path.GetTempPath(), $"lol-overlay-synthetic-{Guid.NewGuid():N}.png");
@@ -79,6 +132,7 @@ public sealed class WindowsAdapterTests
 
             Assert.NotNull(first);
             Assert.Same(first, second);
+            Assert.InRange(first.Width, 1, 64);
             Assert.Equal(1, cache.DecodeCount);
             Assert.Equal(1, cache.CacheHits);
         }
@@ -109,5 +163,20 @@ public sealed class WindowsAdapterTests
         {
             File.Delete(path);
         }
+    }
+
+    private sealed class NullStaticGameDataProvider : IStaticGameDataProvider
+    {
+        public Task InitializeAsync(CancellationToken cancellationToken) => Task.CompletedTask;
+
+        public ChampionDescriptor ResolveChampion(string championName, int championId = 0) =>
+            new(championId, "Unknown", championName, [ChampionArchetype.Fighter]);
+
+        public int GetItemGoldValue(int itemId) => 0;
+
+        public ValueTask<string?> EnsureChampionIconAsync(
+            ChampionDescriptor champion,
+            CancellationToken cancellationToken) =>
+            ValueTask.FromResult<string?>(null);
     }
 }

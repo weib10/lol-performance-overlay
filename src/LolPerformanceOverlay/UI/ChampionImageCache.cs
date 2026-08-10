@@ -1,6 +1,7 @@
 using System.Collections.Concurrent;
 using System.Windows.Media;
 using System.Windows.Media.Imaging;
+using LolPerformanceOverlay.Core;
 
 namespace LolPerformanceOverlay.UI;
 
@@ -10,6 +11,7 @@ namespace LolPerformanceOverlay.UI;
 /// </summary>
 internal sealed class ChampionImageCache
 {
+    private const int DecodePixelWidth = 64;
     private readonly ConcurrentDictionary<string, Lazy<Task<ImageSource?>>> _images =
         new(StringComparer.OrdinalIgnoreCase);
     private long _cacheHits;
@@ -60,18 +62,21 @@ internal sealed class ChampionImageCache
 
         try
         {
-            var bytes = File.ReadAllBytes(path);
-            using var stream = new MemoryStream(bytes, writable: false);
-            var decoder = BitmapDecoder.Create(
-                stream,
-                BitmapCreateOptions.PreservePixelFormat,
-                BitmapCacheOption.OnLoad);
-            if (decoder.Frames.Count == 0)
+            if (new FileInfo(path).Length > PngPayloadValidator.MaximumEncodedBytes)
             {
+                TryDeleteInvalidCacheFile(path);
                 return null;
             }
 
-            var bitmap = decoder.Frames[0];
+            var bytes = File.ReadAllBytes(path);
+            using var stream = new MemoryStream(bytes, writable: false);
+            var bitmap = new BitmapImage();
+            bitmap.BeginInit();
+            bitmap.CacheOption = BitmapCacheOption.OnLoad;
+            bitmap.CreateOptions = BitmapCreateOptions.PreservePixelFormat;
+            bitmap.DecodePixelWidth = DecodePixelWidth;
+            bitmap.StreamSource = stream;
+            bitmap.EndInit();
             bitmap.Freeze();
             Interlocked.Increment(ref _decodeCount);
             return bitmap;
@@ -97,7 +102,7 @@ internal sealed class ChampionImageCache
         }
         catch
         {
-            // A locked cache file can be retried on a later snapshot; decode failure stays isolated.
+            // A locked cache file may be retried after a visual generation rebuild; failure stays isolated.
         }
     }
 }

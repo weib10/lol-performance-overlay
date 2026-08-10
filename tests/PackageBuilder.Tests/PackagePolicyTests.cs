@@ -46,6 +46,29 @@ public sealed class PackagePolicyTests
     }
 
     [Fact]
+    public void GameIntegrityGateRejectsMemoryInjectionAndAutomatedInputCapabilities()
+    {
+        var source = string.Join(' ',
+            "ReadProcessMemory(handle);",
+            "CreateRemoteThread(handle);",
+            "SendInput(events);");
+
+        var violations = PackageBuilder.FindForbiddenGameCapabilities(source);
+
+        Assert.Contains("ReadProcessMemory", violations);
+        Assert.Contains("CreateRemoteThread", violations);
+        Assert.Contains("SendInput(", violations);
+    }
+
+    [Fact]
+    public void GameIntegrityGateAllowsOrdinaryProcessDiscoveryAndWpfInputEvents()
+    {
+        const string source = "Process.GetProcessesByName(\"LeagueClientUx\"); MouseMove += OnMouseMove;";
+
+        Assert.Empty(PackageBuilder.FindForbiddenGameCapabilities(source));
+    }
+
+    [Fact]
     public void PortableExecutableVersionEvidenceCanContainHostAndProductResources()
     {
         var evidence = string.Join('\0',

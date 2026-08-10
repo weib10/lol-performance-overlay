@@ -322,8 +322,11 @@ Session loop 從 WPF startup 啟動，async iterator、HTTP await、JSON parsing
 - `scripts/package.sh` 與 `scripts/package.ps1` 都只啟動同一個跨平台 PackageBuilder，不各自維護一套容易漂移的 publish 或掃描流程。
 - Linux 入口會 restore、執行所有 `net8.0` 測試、cross-build `net8.0-windows` tests，再以 `EnableWindowsTargeting=true` cross-publish WPF；Windows 入口才會實際執行兩類測試，之後以相同參數 publish。
 - PackageBuilder 將實際 EXE SHA-256 注入完全離線的 `先看這裡.html`，ZIP 頂層只接受 `LoL即時表現Overlay.exe` 與 `先看這裡.html`，並輸出 `package-manifest.json` 和 `SHA256SUMS.txt`。
+- PackageBuilder 另以 source gate 阻擋 process-memory read/write、remote-thread／hook／injection、driver I/O 與自動鍵鼠輸入能力進入 shipping source；這是 regression guard，不是 Vanguard 安全認證。
 - `.github/workflows/windows-package.yml` 在 `windows-latest` 呼叫相同 `scripts/package.ps1`，只上傳候選 artifact，不自動合併、tag 或建立正式 Release。
 - 朋友 HTML 按「安全與隱私 → 開始 → 拖曳／鎖定／重設 → 資料意義 → 疑難排解 → 移除」排列；歷史真人資料未啟用時明確顯示 unavailable，OP.GG 只是使用者主動開啟的普通瀏覽器連結。
+- 位置保存以單一 reusable timer／最多一個 worker 合併高頻拖曳事件；歷史 cache 預設最多 256 筆，有 stale TTL、週期清理、LRU eviction、同 key inflight coalescing 與 dispose cancellation。
+- 本機與 Data Dragon HTTP client 都禁止 redirect；回應 body 有 byte 上限，League Client 自簽 TLS bypass 只允許 request URI 仍是精確 HTTPS loopback host。
 
 ### 尚不能由 Linux 宣稱通過
 
@@ -341,19 +344,19 @@ Session loop 從 WPF startup 啟動，async iterator、HTTP await、JSON parsing
 - 互動方案 B：只允許專用 grip 拖曳，其餘背景 click-through。
 - 固定 100 個 headless hit targets（80 背景、10 grip、10 controls）的 Replay 比較：A 有 90 個可拖目標，B 有 10 個；兩者控制項攔截皆為 0。另以 pointer state-machine tests 驗證 5 DIP 內只 click、超過門檻只 drag、lost capture 可復原。因 A 的可發現拖曳範圍為 B 的 9 倍且沒有新增 control interception，候選實作採 A。
 
-固定 1,800 frames（代表每秒一筆、30 分鐘）的更新 proxy：
+固定 1,800 frames（代表每秒一筆、30 分鐘）的更新 proxy。本輪 audit 前基準取自 `957b03c` 的相同 Release test corpus；先前已完成的 presentation 去重仍維持 30 次 update，沒有倒退：
 
-| 指標 | 修改前程式碼路徑 | 修改後 | 判讀 |
+| 指標 | 本輪 audit 前 | 本輪 audit 後 | 判讀 |
 |---|---:|---:|---|
-| presentation update policy | 1,800 | 30 | 無可見變化 frame 被 keyed diff 丟棄，減少 98.3% |
-| reducer 總耗時 | 不適用（每 frame 直接 render） | 5.917 ms | 1,800 frames 純邏輯總計 |
-| reducer 配置 | 不適用 | 333,624 bytes | 同一固定 corpus |
-| scorer + reducer 總耗時 | 尚無獨立修改前 scorer 基準 | 224.502 ms | 不把它冒充 WPF UI latency |
-| scorer + reducer 配置 | 尚無獨立修改前 scorer 基準 | 55,735,552 bytes | 約 30.96 KB/frame |
-| forced-GC retained growth | 未量測 | 8,096 bytes | 舊 snapshot weak references 僅 1 個仍存活 |
+| presentation update policy | 30 | 30 | 相對 legacy 1,800 次仍減少 98.3%；本輪維持相同行為 |
+| reducer 總耗時 | 5.555 ms | 4.280 ms | 降低約 23.0% |
+| reducer 配置 | 333,752 bytes | 114,912 bytes | 降低約 65.6% |
+| scorer + reducer 總耗時 | 211.646 ms | 53.261 ms | 降低約 74.8%；不把它冒充 WPF UI latency |
+| scorer + reducer 配置 | 55,749,952 bytes | 9,525,128 bytes | 降低約 82.9%，約 5.17 KB/frame |
+| forced-GC retained growth | 8,688 bytes | 7,504 bytes | 舊 snapshot weak references 均僅 1 個仍存活 |
 
-另以真實 wall clock 每秒送入一筆 scorer + reducer frame，連續執行 30.0155 分鐘／1,800 frames；forced GC 後 retained growth 為 313,056 bytes（約 0.30 MB，低於 10 MB 門檻）。這項 soak 驗證純邏輯 pipeline 沒有持續線性成長，但仍不取代 Windows WPF visual、拖曳與真實對局的記憶體觀察。
+另以真實 wall clock 每秒送入一筆 scorer + reducer frame，連續執行 30.0151 分鐘／1,800 frames；forced GC 後 retained growth 為 281,480 bytes（約 0.27 MB，低於 10 MB 門檻）。這項 soak 驗證純邏輯 pipeline 沒有持續線性成長，但仍不取代 Windows WPF visual、拖曳與真實對局的記憶體觀察。
 
-目前 Linux Release 驗證為跨平台 Core 105／105 與 PackageBuilder policy 20／20 通過；`net8.0-windows` WPF shell 和 Windows integration tests 均以 `EnableWindowsTargeting=true` cross-build、0 warning／0 error。Windows-only tests 尚須由 Windows runner 實際執行。
+目前 Linux Release 驗證為跨平台 Core 150／150 與 PackageBuilder policy 22／22 通過；`net8.0-windows` WPF shell 和 Windows integration tests 均以 `EnableWindowsTargeting=true`、單一 MSBuild node cross-build，0 warning／0 error。Windows-only tests 尚須由 Windows runner 實際執行。
 
 修改前的 `OverlayWindow.ApplySnapshot()` 對每個 frame 呼叫 `Render()`，Expanded 每次又對最多十名玩家建立 `BitmapImage`；因此相同 1,800-frame corpus 會走 1,800 次 visual-tree rebuild 與最多 18,000 次 decode 路徑。修改後 mode 內 visual tree 長生命週期、同一路徑圖片只在背景 decode 一次；實際 Windows decode count、UI update P95、CPU、GC 與拖曳 frame pacing仍須由 Windows 真機量測，不能用上述 Linux proxy 取代。

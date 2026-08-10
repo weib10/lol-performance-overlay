@@ -53,8 +53,8 @@ public sealed class PerformanceScorerTests
 
         Assert.True(strong.PerformanceScore > 75d);
         Assert.True(weak.PerformanceScore < 25d);
-        Assert.Equal("強勢", strong.PerformanceLabel);
-        Assert.Equal("明顯落後", weak.PerformanceLabel);
+        Assert.Equal("本場較高", strong.PerformanceLabel);
+        Assert.Equal("本場較低", weak.PerformanceLabel);
     }
 
     [Fact]
@@ -89,6 +89,22 @@ public sealed class PerformanceScorerTests
         var marksman = result.Teams.SelectMany(team => team.Players).Single(player => player.StableKey == "p1");
 
         Assert.True(support.PerformanceScore > marksman.PerformanceScore);
+    }
+
+    [Fact]
+    public void TeamSummaryLabelsDescriptiveMetricRatherThanGameAdvantage()
+    {
+        var players = Enumerable.Range(0, 10)
+            .Select(index => index < 5
+                ? Player(index, 100, ChampionArchetype.Fighter, kills: 10, deaths: 1, assists: 10, gold: 12_000)
+                : Player(index, 200, ChampionArchetype.Fighter, kills: 0, deaths: 10, assists: 0, gold: 2_000))
+            .ToArray();
+
+        var result = new PerformanceScorer().Evaluate(Frame(900, players));
+
+        Assert.Contains("我方本場指標較高", result.Summary, StringComparison.Ordinal);
+        Assert.DoesNotContain("領先", result.Summary, StringComparison.Ordinal);
+        Assert.DoesNotContain("落後", result.Summary, StringComparison.Ordinal);
     }
 
     [Theory]
@@ -141,6 +157,105 @@ public sealed class PerformanceScorerTests
             forbidden.Any(word => name.Contains(word, StringComparison.OrdinalIgnoreCase)));
     }
 
+    [Fact]
+    public void SortedPercentileRanksMatchOriginalTieSemantics()
+    {
+        var values = new[] { 8d, 1d, 4d, 4d, 12d, 4.0000005d, -2d };
+        var expected = values.Select(value => OriginalPercentile(values, value)).ToArray();
+
+        var actual = PerformanceScorer.PercentileRanksForTesting(values);
+
+        Assert.Equal(expected.Length, actual.Length);
+        for (var index = 0; index < expected.Length; index++)
+        {
+            Assert.Equal(expected[index], actual[index], 10);
+        }
+    }
+
+    [Fact]
+    public void SortedPercentileRanksMatchQuadraticReferenceAcrossDeterministicCorpora()
+    {
+        var random = new Random(0x5C0E);
+        for (var corpus = 0; corpus < 100; corpus++)
+        {
+            var values = Enumerable.Range(0, random.Next(2, 65))
+                .Select(_ => random.Next(-20, 21) + random.Next(0, 3) * 0.0000004d)
+                .ToArray();
+            var expected = values.Select(value => OriginalPercentile(values, value)).ToArray();
+
+            var actual = PerformanceScorer.PercentileRanksForTesting(values);
+
+            Assert.Equal(expected.Length, actual.Length);
+            for (var index = 0; index < expected.Length; index++)
+            {
+                Assert.Equal(expected[index], actual[index], 10);
+            }
+        }
+    }
+
+    [Fact]
+    public void RepeatedSessionsAndRosterChangesKeepOnlyCurrentPlayerState()
+    {
+        var scorer = new PerformanceScorer();
+        for (var match = 0; match < 200; match++)
+        {
+            var players = Enumerable.Range(0, 10)
+                .Select(index => Player(match * 10 + index, index < 5 ? 100 : 200, ChampionArchetype.Fighter))
+                .ToArray();
+            scorer.Evaluate(Frame(600, players) with
+            {
+                Phase = LeaguePhase.InGame,
+                CapturedAt = DateTimeOffset.UnixEpoch.AddMinutes(match)
+            });
+            Assert.InRange(scorer.RetainedScoreCount, 0, 10);
+            scorer.Evaluate(Frame(0, Array.Empty<RawPlayerState>()) with { Phase = LeaguePhase.EndOfGame });
+            Assert.Equal(0, scorer.RetainedScoreCount);
+        }
+    }
+
+    [Fact]
+    public void StartingNextMatchWithoutChampSelectDoesNotReusePreviousEma()
+    {
+        var scorer = new PerformanceScorer();
+        var players = Enumerable.Range(0, 10)
+            .Select(index => Player(index, index < 5 ? 100 : 200, ChampionArchetype.Fighter))
+            .ToArray();
+        players[0] = Player(0, 100, ChampionArchetype.Fighter, kills: 20, deaths: 0, assists: 10);
+        var first = scorer.Evaluate(Frame(600, players));
+        scorer.Evaluate(Frame(0, Array.Empty<RawPlayerState>()) with { Phase = LeaguePhase.Lobby });
+
+        var neutralPlayers = Enumerable.Range(0, 10)
+            .Select(index => Player(index, index < 5 ? 100 : 200, ChampionArchetype.Fighter))
+            .ToArray();
+        var next = scorer.Evaluate(Frame(60, neutralPlayers) with { Phase = LeaguePhase.Loading });
+
+        Assert.NotEqual(
+            first.Teams.SelectMany(team => team.Players).Single(player => player.StableKey == "p0").PerformanceScore,
+            next.Teams.SelectMany(team => team.Players).Single(player => player.StableKey == "p0").PerformanceScore);
+        Assert.Equal(10, scorer.RetainedScoreCount);
+    }
+
+    [Fact]
+    public void GameClockRestartWithinLivePhaseClearsPreviousMatchEma()
+    {
+        var scorer = new PerformanceScorer();
+        var dominantPlayers = Enumerable.Range(0, 10)
+            .Select(index => Player(index, index < 5 ? 100 : 200, ChampionArchetype.Fighter))
+            .ToArray();
+        dominantPlayers[0] = Player(0, 100, ChampionArchetype.Fighter, kills: 20, deaths: 0, assists: 10);
+        _ = scorer.Evaluate(Frame(1_200, dominantPlayers));
+
+        var neutralPlayers = Enumerable.Range(0, 10)
+            .Select(index => Player(index, index < 5 ? 100 : 200, ChampionArchetype.Fighter))
+            .ToArray();
+        var reusedScorerResult = scorer.Evaluate(Frame(30, neutralPlayers));
+        var freshScorerResult = new PerformanceScorer().Evaluate(Frame(30, neutralPlayers));
+
+        Assert.Equal(
+            freshScorerResult.Teams.SelectMany(team => team.Players).Single(player => player.StableKey == "p0").PerformanceScore,
+            reusedScorerResult.Teams.SelectMany(team => team.Players).Single(player => player.StableKey == "p0").PerformanceScore);
+    }
+
     private static LeagueSessionFrame Frame(double seconds, IReadOnlyList<RawPlayerState> players) =>
         new(
             LeaguePhase.InGame,
@@ -176,4 +291,12 @@ public sealed class PerformanceScorerTests
             creep,
             level,
             [new RawItemState(1000 + index, 1, gold)]);
+
+    private static double OriginalPercentile(IReadOnlyList<double> values, double value)
+    {
+        const double epsilon = 0.000001d;
+        var less = values.Count(candidate => candidate < value - epsilon);
+        var equal = values.Count(candidate => Math.Abs(candidate - value) <= epsilon);
+        return Math.Clamp((less + 0.5d * Math.Max(equal - 1, 0)) / (values.Count - 1d), 0d, 1d);
+    }
 }

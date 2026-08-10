@@ -6,6 +6,11 @@ namespace LolPerformanceOverlay.Core;
 /// </summary>
 public sealed record RevealedPlayerIdentity
 {
+    private const int MaximumStableKeyLength = 256;
+    private const int MaximumGameNameLength = 128;
+    private const int MaximumTagLineLength = 32;
+    private const int MaximumRegionLength = 32;
+
     private RevealedPlayerIdentity(string stableKey, string gameName, string tagLine, string region)
     {
         StableKey = stableKey;
@@ -44,7 +49,11 @@ public sealed record RevealedPlayerIdentity
         if (string.IsNullOrWhiteSpace(stableKey) ||
             string.IsNullOrWhiteSpace(gameName) ||
             string.IsNullOrWhiteSpace(tagLine) ||
-            string.IsNullOrWhiteSpace(region))
+            string.IsNullOrWhiteSpace(region) ||
+            stableKey.Length > MaximumStableKeyLength ||
+            gameName.Length > MaximumGameNameLength ||
+            tagLine.Length > MaximumTagLineLength ||
+            region.Length > MaximumRegionLength)
         {
             return false;
         }
@@ -60,6 +69,9 @@ public sealed record RevealedPlayerIdentity
 
 public sealed record HistoricalQueue
 {
+    private const int MaximumModeLength = 64;
+    private const int MaximumDisplayNameLength = 128;
+
     public HistoricalQueue(int queueId, string mode, string displayName)
     {
         if (queueId < 0)
@@ -69,8 +81,20 @@ public sealed record HistoricalQueue
 
         ArgumentException.ThrowIfNullOrWhiteSpace(mode);
         ArgumentException.ThrowIfNullOrWhiteSpace(displayName);
+        if (mode.Length > MaximumModeLength)
+        {
+            throw new ArgumentOutOfRangeException(nameof(mode));
+        }
+
+        if (displayName.Length > MaximumDisplayNameLength)
+        {
+            throw new ArgumentOutOfRangeException(nameof(displayName));
+        }
+
         QueueId = queueId;
-        Mode = mode.Trim();
+        // Normalize once at the model boundary; cache-key creation is a recurring lookup and
+        // should not allocate a second uppercase string for every request.
+        Mode = mode.Trim().ToUpperInvariant();
         DisplayName = displayName.Trim();
     }
 
@@ -139,9 +163,16 @@ public enum HistoricalStyleBand
 
 public sealed record HistoricalProfileSource
 {
+    private const int MaximumDisplayNameLength = 128;
+
     public HistoricalProfileSource(HistoricalSourceKind kind, string displayName)
     {
         ArgumentException.ThrowIfNullOrWhiteSpace(displayName);
+        if (displayName.Length > MaximumDisplayNameLength)
+        {
+            throw new ArgumentOutOfRangeException(nameof(displayName));
+        }
+
         Kind = kind;
         DisplayName = displayName.Trim();
     }
@@ -152,11 +183,23 @@ public sealed record HistoricalProfileSource
 
 public sealed record OfficialRank
 {
+    private const int MaximumRankFieldLength = 32;
+
     public OfficialRank(HistoricalQueue queue, string tier, string division, int? leaguePoints = null)
     {
         ArgumentNullException.ThrowIfNull(queue);
         ArgumentException.ThrowIfNullOrWhiteSpace(tier);
         ArgumentException.ThrowIfNullOrWhiteSpace(division);
+        if (tier.Length > MaximumRankFieldLength)
+        {
+            throw new ArgumentOutOfRangeException(nameof(tier));
+        }
+
+        if (division.Length > MaximumRankFieldLength)
+        {
+            throw new ArgumentOutOfRangeException(nameof(division));
+        }
+
         if (leaguePoints is < 0)
         {
             throw new ArgumentOutOfRangeException(nameof(leaguePoints));
@@ -176,9 +219,16 @@ public sealed record OfficialRank
 
 public sealed record HistoricalChampionUsage
 {
+    private const int MaximumChampionNameLength = 128;
+
     public HistoricalChampionUsage(string championName, int sampleCount)
     {
         ArgumentException.ThrowIfNullOrWhiteSpace(championName);
+        if (championName.Length > MaximumChampionNameLength)
+        {
+            throw new ArgumentOutOfRangeException(nameof(championName));
+        }
+
         if (sampleCount < 0)
         {
             throw new ArgumentOutOfRangeException(nameof(sampleCount));
@@ -194,9 +244,16 @@ public sealed record HistoricalChampionUsage
 
 public sealed record HistoricalRoleUsage
 {
+    private const int MaximumRoleLength = 64;
+
     public HistoricalRoleUsage(string role, int sampleCount)
     {
         ArgumentException.ThrowIfNullOrWhiteSpace(role);
+        if (role.Length > MaximumRoleLength)
+        {
+            throw new ArgumentOutOfRangeException(nameof(role));
+        }
+
         if (sampleCount < 0)
         {
             throw new ArgumentOutOfRangeException(nameof(sampleCount));
@@ -212,9 +269,16 @@ public sealed record HistoricalRoleUsage
 
 public sealed record HistoricalStyleDimension
 {
+    private const int MaximumExplanationLength = 256;
+
     public HistoricalStyleDimension(HistoricalStyleBand band, string explanation)
     {
         ArgumentException.ThrowIfNullOrWhiteSpace(explanation);
+        if (explanation.Length > MaximumExplanationLength)
+        {
+            throw new ArgumentOutOfRangeException(nameof(explanation));
+        }
+
         Band = band;
         Explanation = explanation.Trim();
     }
@@ -248,6 +312,9 @@ public sealed record HistoricalPlayStyle
 
 public sealed record HistoricalProfile
 {
+    private const int MaximumCommonChampionCount = 32;
+    private const int MaximumCommonRoleCount = 8;
+
     public HistoricalProfile(
         HistoricalQueue queue,
         OfficialRank? officialRank,
@@ -269,8 +336,14 @@ public sealed record HistoricalProfile
         SampleCount = sampleCount;
         FetchedAt = fetchedAt;
         Confidence = confidence;
-        CommonChampions = commonChampions?.ToArray() ?? throw new ArgumentNullException(nameof(commonChampions));
-        CommonRoles = commonRoles?.ToArray() ?? throw new ArgumentNullException(nameof(commonRoles));
+        CommonChampions = MaterializeBounded(
+            commonChampions,
+            MaximumCommonChampionCount,
+            nameof(commonChampions));
+        CommonRoles = MaterializeBounded(
+            commonRoles,
+            MaximumCommonRoleCount,
+            nameof(commonRoles));
         PlayStyle = playStyle ?? throw new ArgumentNullException(nameof(playStyle));
         Source = source ?? throw new ArgumentNullException(nameof(source));
     }
@@ -284,6 +357,21 @@ public sealed record HistoricalProfile
     public IReadOnlyList<HistoricalRoleUsage> CommonRoles { get; }
     public HistoricalPlayStyle PlayStyle { get; }
     public HistoricalProfileSource Source { get; }
+
+    private static IReadOnlyList<T> MaterializeBounded<T>(
+        IEnumerable<T>? values,
+        int maximumCount,
+        string parameterName)
+    {
+        ArgumentNullException.ThrowIfNull(values, parameterName);
+        var materialized = values.Take(maximumCount + 1).ToArray();
+        if (materialized.Length > maximumCount)
+        {
+            throw new ArgumentOutOfRangeException(parameterName);
+        }
+
+        return materialized;
+    }
 }
 
 public sealed record HistoricalProfileQuery

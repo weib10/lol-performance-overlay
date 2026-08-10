@@ -3,6 +3,9 @@ namespace LolPerformanceOverlay.Core;
 
 internal static class LeagueSessionParser
 {
+    private const int MaximumPlayers = 10;
+    private const int MaximumItemsPerPlayer = 7;
+
     public static IReadOnlyList<ParsedChampSelectMember> ParseChampSelectMembers(string json)
     {
         using var document = JsonDocument.Parse(json);
@@ -33,6 +36,11 @@ internal static class LeagueSessionParser
         var index = 0;
         foreach (var element in document.RootElement.EnumerateArray())
         {
+            if (index >= MaximumPlayers)
+            {
+                break;
+            }
+
             var scores = TryGet(element, "scores");
             var items = new List<ParsedLiveItem>();
             var itemArray = TryGet(element, "items");
@@ -40,6 +48,11 @@ internal static class LeagueSessionParser
             {
                 foreach (var item in itemArray.Value.EnumerateArray())
                 {
+                    if (items.Count >= MaximumItemsPerPlayer)
+                    {
+                        break;
+                    }
+
                     items.Add(new ParsedLiveItem(
                         ReadInt(item, "itemID", "itemId"),
                         Math.Max(ReadInt(item, "count"), 1),
@@ -112,9 +125,14 @@ internal static class LeagueSessionParser
 
         foreach (var member in team.EnumerateArray())
         {
+            if (result.Count >= MaximumPlayers)
+            {
+                break;
+            }
+
             var visibility = ReadString(member, "nameVisibilityType");
             var puuid = ReadString(member, "puuid");
-            var hidden = string.Equals(visibility, "HIDDEN", StringComparison.OrdinalIgnoreCase) ||
+            var hidden = !string.Equals(visibility, "VISIBLE", StringComparison.OrdinalIgnoreCase) ||
                          string.IsNullOrWhiteSpace(puuid) ||
                          puuid == "00000000-0000-0000-0000-000000000000";
             var cellId = ReadInt(member, "cellId");
@@ -135,12 +153,15 @@ internal static class LeagueSessionParser
         }
     }
 
-    private static int ParseTeam(string? value) => value?.ToUpperInvariant() switch
+    private static int ParseTeam(string? value)
     {
-        "ORDER" => 100,
-        "CHAOS" => 200,
-        _ => 0
-    };
+        if (string.Equals(value, "ORDER", StringComparison.OrdinalIgnoreCase))
+        {
+            return 100;
+        }
+
+        return string.Equals(value, "CHAOS", StringComparison.OrdinalIgnoreCase) ? 200 : 0;
+    }
 
     private static JsonElement? TryGet(JsonElement element, string propertyName)
     {
@@ -165,18 +186,23 @@ internal static class LeagueSessionParser
             ? value.GetString()
             : null;
 
-    private static int ReadInt(JsonElement element, params string[] propertyNames)
+    private static int ReadInt(JsonElement element, string propertyName)
     {
-        foreach (var propertyName in propertyNames)
+        var value = TryGet(element, propertyName);
+        return value is { ValueKind: JsonValueKind.Number } && value.Value.TryGetInt32(out var result)
+            ? result
+            : 0;
+    }
+
+    private static int ReadInt(JsonElement element, string firstPropertyName, string secondPropertyName)
+    {
+        var first = TryGet(element, firstPropertyName);
+        if (first is { ValueKind: JsonValueKind.Number } && first.Value.TryGetInt32(out var firstResult))
         {
-            var value = TryGet(element, propertyName);
-            if (value is { ValueKind: JsonValueKind.Number } && value.Value.TryGetInt32(out var result))
-            {
-                return result;
-            }
+            return firstResult;
         }
 
-        return 0;
+        return ReadInt(element, secondPropertyName);
     }
 
     private static double ReadDouble(JsonElement element, string propertyName)

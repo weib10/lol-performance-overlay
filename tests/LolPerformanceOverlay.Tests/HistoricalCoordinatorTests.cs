@@ -51,6 +51,30 @@ public sealed class HistoricalCoordinatorTests
     }
 
     [Fact]
+    public async Task EquivalentQueueModeCasingSharesCacheEntry()
+    {
+        var clock = new HistoricalManualTimeProvider(Now);
+        var transport = new RecordingHistoricalTransport((player, query, _) =>
+            Task.FromResult(HistoricalProfileTransportResult.WithProfile(
+                HistoricalProfileAvailability.Available,
+                HistoricalTestData.Profile(player, query.Queue, clock.GetUtcNow()))));
+        using var coordinator = CreateCoordinator(transport, clock);
+        var player = HistoricalTestData.Player(67);
+
+        await coordinator.GetProfilesAsync(
+            [player],
+            new HistoricalProfileQuery(new HistoricalQueue(420, " classic ", "Synthetic Solo")),
+            CancellationToken.None);
+        await coordinator.GetProfilesAsync(
+            [player],
+            new HistoricalProfileQuery(HistoricalQueue.RankedSolo),
+            CancellationToken.None);
+
+        Assert.Equal(1, transport.CallCount);
+        Assert.Equal(1, coordinator.CacheCount);
+    }
+
+    [Fact]
     public async Task ExpiredFreshProfileFallsBackToStaleOnOfflineFailure()
     {
         var clock = new HistoricalManualTimeProvider(Now);
@@ -254,6 +278,65 @@ public sealed class HistoricalCoordinatorTests
     }
 
     [Fact]
+    public async Task ProfileOlderThanStaleLifetimeIsRejectedAndNotCached()
+    {
+        var clock = new HistoricalManualTimeProvider(Now);
+        var transport = new RecordingHistoricalTransport((player, query, _) =>
+            Task.FromResult(HistoricalProfileTransportResult.WithProfile(
+                HistoricalProfileAvailability.Stale,
+                HistoricalTestData.Profile(player, query.Queue, Now.AddHours(-2)))));
+        using var coordinator = CreateCoordinator(
+            transport,
+            clock,
+            freshLifetime: TimeSpan.FromMinutes(5),
+            staleLifetime: TimeSpan.FromMinutes(30));
+
+        var result = await coordinator.GetProfilesAsync(
+            [HistoricalTestData.Player(65)],
+            new HistoricalProfileQuery(HistoricalQueue.RankedSolo),
+            CancellationToken.None);
+
+        var entry = Assert.Single(result.Entries);
+        Assert.Equal(HistoricalProfileAvailability.Malformed, entry.Availability);
+        Assert.Null(entry.Profile);
+        Assert.Equal(0, coordinator.CacheCount);
+    }
+
+    [Fact]
+    public async Task OfficialRankFromDifferentQueueIsRejectedAsMalformed()
+    {
+        var clock = new HistoricalManualTimeProvider(Now);
+        var transport = new RecordingHistoricalTransport((player, query, _) =>
+        {
+            var valid = HistoricalTestData.Profile(player, query.Queue, clock.GetUtcNow());
+            var mismatched = new HistoricalProfile(
+                valid.Queue,
+                new OfficialRank(HistoricalQueue.RankedFlex, "SILVER", "II", 42),
+                valid.SampleCount,
+                valid.FetchedAt,
+                valid.Confidence,
+                valid.CommonChampions,
+                valid.CommonRoles,
+                valid.PlayStyle,
+                valid.Source);
+            return Task.FromResult(HistoricalProfileTransportResult.WithProfile(
+                HistoricalProfileAvailability.Available,
+                mismatched));
+        });
+        using var coordinator = CreateCoordinator(transport, clock);
+
+        var result = await coordinator.GetProfilesAsync(
+            [HistoricalTestData.Player(66)],
+            new HistoricalProfileQuery(HistoricalQueue.RankedSolo),
+            CancellationToken.None);
+
+        var entry = Assert.Single(result.Entries);
+        Assert.Equal(HistoricalProfileAvailability.Malformed, entry.Availability);
+        Assert.Null(entry.Profile);
+        Assert.Equal(0, coordinator.CacheCount);
+    }
+
+    [Fact]
     public async Task HttpFailureIsClassifiedAsOfflineWithoutLeakingExceptionText()
     {
         var clock = new HistoricalManualTimeProvider(Now);
@@ -272,20 +355,114 @@ public sealed class HistoricalCoordinatorTests
         Assert.Null(entry.Profile);
     }
 
+    [Fact]
+    public async Task CacheEvictsLeastRecentlyUsedEntriesAtConfiguredBound()
+    {
+        var clock = new HistoricalManualTimeProvider(Now);
+        var transport = new RecordingHistoricalTransport((player, query, _) =>
+            Task.FromResult(HistoricalProfileTransportResult.WithProfile(
+                HistoricalProfileAvailability.Available,
+                HistoricalTestData.Profile(player, query.Queue, clock.GetUtcNow()))));
+        using var coordinator = CreateCoordinator(transport, clock, maximumCacheEntries: 4);
+        var query = new HistoricalProfileQuery(HistoricalQueue.RankedSolo);
+
+        for (var index = 0; index < 20; index++)
+        {
+            await coordinator.GetProfilesAsync(
+                [HistoricalTestData.Player(100 + index)],
+                query,
+                CancellationToken.None);
+            Assert.InRange(coordinator.CacheCount, 0, 4);
+        }
+
+        Assert.Equal(4, coordinator.CacheCount);
+        await coordinator.GetProfilesAsync([HistoricalTestData.Player(100)], query, CancellationToken.None);
+        Assert.Equal(21, transport.CallCount);
+        Assert.Equal(4, coordinator.CacheCount);
+    }
+
+    [Fact]
+    public async Task MaintenanceRemovesProfilesPastStaleLifetime()
+    {
+        var clock = new HistoricalManualTimeProvider(Now);
+        var transport = new RecordingHistoricalTransport((player, query, _) =>
+            Task.FromResult(HistoricalProfileTransportResult.WithProfile(
+                HistoricalProfileAvailability.Available,
+                HistoricalTestData.Profile(player, query.Queue, clock.GetUtcNow()))));
+        using var coordinator = CreateCoordinator(
+            transport,
+            clock,
+            freshLifetime: TimeSpan.FromMinutes(1),
+            staleLifetime: TimeSpan.FromMinutes(5));
+
+        await coordinator.GetProfilesAsync(
+            [HistoricalTestData.Player(130)],
+            new HistoricalProfileQuery(HistoricalQueue.RankedSolo),
+            CancellationToken.None);
+        Assert.Equal(1, coordinator.CacheCount);
+
+        clock.Advance(TimeSpan.FromMinutes(6));
+        coordinator.RunCacheMaintenance();
+
+        Assert.Equal(0, coordinator.CacheCount);
+    }
+
+    [Fact]
+    public async Task DisposeClearsCacheAndCancelsInflightWithoutAddRace()
+    {
+        var clock = new HistoricalManualTimeProvider(Now);
+        var entered = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
+        var cancelled = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
+        var transport = new RecordingHistoricalTransport(async (_, _, cancellationToken) =>
+        {
+            entered.TrySetResult();
+            try
+            {
+                await Task.Delay(Timeout.InfiniteTimeSpan, cancellationToken);
+            }
+            catch (OperationCanceledException) when (cancellationToken.IsCancellationRequested)
+            {
+                cancelled.TrySetResult();
+                throw;
+            }
+
+            throw new InvalidOperationException("Unreachable synthetic branch");
+        });
+        var coordinator = CreateCoordinator(transport, clock);
+        var pending = coordinator.GetProfilesAsync(
+            [HistoricalTestData.Player(140)],
+            new HistoricalProfileQuery(HistoricalQueue.RankedSolo),
+            CancellationToken.None);
+        await entered.Task.WaitAsync(TimeSpan.FromSeconds(1));
+
+        coordinator.Dispose();
+
+        await cancelled.Task.WaitAsync(TimeSpan.FromSeconds(1));
+        await Assert.ThrowsAnyAsync<OperationCanceledException>(() => pending);
+        await WaitUntilAsync(() => coordinator.InflightCount == 0, TimeSpan.FromSeconds(1));
+        Assert.Equal(0, coordinator.CacheCount);
+        await Assert.ThrowsAsync<ObjectDisposedException>(() => coordinator.GetProfilesAsync(
+            [HistoricalTestData.Player(141)],
+            new HistoricalProfileQuery(HistoricalQueue.RankedSolo),
+            CancellationToken.None));
+    }
+
     private static HistoricalProfileCoordinator CreateCoordinator(
         IHistoricalProfileTransport transport,
         TimeProvider clock,
         TimeSpan? requestTimeout = null,
         TimeSpan? freshLifetime = null,
         TimeSpan? staleLifetime = null,
-        int maximumConcurrency = 3) =>
+        int maximumConcurrency = 3,
+        int maximumCacheEntries = 256) =>
         new(
             transport,
             new HistoricalProfileCoordinatorOptions(
                 requestTimeout ?? TimeSpan.FromSeconds(2),
                 freshLifetime ?? TimeSpan.FromMinutes(5),
                 staleLifetime ?? TimeSpan.FromMinutes(30),
-                maximumConcurrency),
+                maximumConcurrency,
+                maximumCacheEntries: maximumCacheEntries),
             clock);
 
     private static async Task WaitUntilAsync(Func<bool> condition, TimeSpan timeout)

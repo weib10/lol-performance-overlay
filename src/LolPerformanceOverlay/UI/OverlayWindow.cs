@@ -45,6 +45,7 @@ public sealed class OverlayWindow : Window
     private readonly List<AvatarView> _compactAvatars = [];
     private readonly List<PlayerRowView> _playerRows = [];
     private readonly List<TeamView> _teamViews = [];
+    private CancellationTokenSource _visualGenerationCancellation = new();
     private OverlaySnapshot _snapshot = OverlaySnapshot.Empty();
     private HistoricalProfilesResult? _historicalProfiles;
     private HwndSource? _source;
@@ -84,7 +85,7 @@ public sealed class OverlayWindow : Window
         Left = double.IsFinite(settings.Left) ? settings.Left : SystemParameters.WorkArea.Right - 58;
         Top = double.IsFinite(settings.Top) ? settings.Top : SystemParameters.WorkArea.Top + 96;
 
-        _pointer.Handle(new PositionLockChanged(settings.PositionLocked));
+        _pointer.HandlePositionLock(settings.PositionLocked);
         SourceInitialized += OnSourceInitialized;
         LocationChanged += OnLocationChanged;
         PreviewMouseLeftButtonDown += OnPointerDown;
@@ -193,7 +194,7 @@ public sealed class OverlayWindow : Window
 
     public void SetPositionLocked(bool locked)
     {
-        ProcessPointerActions(_pointer.Handle(new PositionLockChanged(locked)));
+        ProcessPointerActions(_pointer.HandlePositionLock(locked));
         _settings.PositionLocked = locked;
         Cursor = locked ? Cursors.Arrow : Cursors.SizeAll;
         ApplyWindowInteractionStyle();
@@ -238,6 +239,9 @@ public sealed class OverlayWindow : Window
 
     private void BuildModeVisual()
     {
+        _visualGenerationCancellation.Cancel();
+        _visualGenerationCancellation.Dispose();
+        _visualGenerationCancellation = new CancellationTokenSource();
         _compactAvatars.Clear();
         _playerRows.Clear();
         _teamViews.Clear();
@@ -824,7 +828,10 @@ public sealed class OverlayWindow : Window
         {
             view.IconPath = player.ChampionIconPath;
             view.Image.Source = null;
-            _ = LoadAvatarAsync(view, player.ChampionIconPath);
+            _ = LoadAvatarAsync(
+                view,
+                player.ChampionIconPath,
+                _visualGenerationCancellation.Token);
         }
 
         var hasImage = view.Image.Source is not null;
@@ -834,39 +841,38 @@ public sealed class OverlayWindow : Window
         view.Root.ToolTip = $"{player.ChampionName} · {player.DisplayName}";
     }
 
-    private async Task LoadAvatarAsync(AvatarView view, string? path)
+    private async Task LoadAvatarAsync(
+        AvatarView view,
+        string? path,
+        CancellationToken cancellationToken)
     {
-        const int maximumAttempts = 5;
-        ImageSource? image = null;
-        for (var attempt = 0; attempt < maximumAttempts; attempt++)
+        try
         {
-            image = await _imageCache.GetAsync(path).ConfigureAwait(false);
-            if (image is not null)
+            var image = await _imageCache.GetAsync(path)
+                .WaitAsync(cancellationToken)
+                .ConfigureAwait(false);
+            cancellationToken.ThrowIfCancellationRequested();
+            await Dispatcher.InvokeAsync(() =>
             {
-                break;
-            }
+                if (!string.Equals(view.IconPath, path, StringComparison.OrdinalIgnoreCase))
+                {
+                    return;
+                }
 
-            if (attempt + 1 < maximumAttempts)
-            {
-                await Task.Delay(TimeSpan.FromMilliseconds(500)).ConfigureAwait(false);
-            }
+                view.Image.Source = image;
+                view.Image.Visibility = image is null ? Visibility.Collapsed : Visibility.Visible;
+                view.Initial.Visibility = image is null ? Visibility.Visible : Visibility.Collapsed;
+                // Retain the attempted path after a decode failure. Score-only snapshots keep the
+                // same icon path, so clearing it here would schedule another decode task on every
+                // poll. A changed path (or a rebuilt visual generation) still retries naturally.
+            });
         }
-
-        await Dispatcher.InvokeAsync(() =>
+        catch (OperationCanceledException) when (cancellationToken.IsCancellationRequested)
         {
-            if (!string.Equals(view.IconPath, path, StringComparison.OrdinalIgnoreCase))
-            {
-                return;
-            }
-
-            view.Image.Source = image;
-            view.Image.Visibility = image is null ? Visibility.Collapsed : Visibility.Visible;
-            view.Initial.Visibility = image is null ? Visibility.Visible : Visibility.Collapsed;
-            if (image is null)
-            {
-                view.IconPath = null;
-            }
-        });
+        }
+        catch (InvalidOperationException) when (Dispatcher.HasShutdownStarted)
+        {
+        }
     }
 
     private static void UpdateCompactTeam(OverlayTeam? team, TextBlock? heading, TextBlock? detail)
@@ -888,8 +894,8 @@ public sealed class OverlayWindow : Window
         var scored = team.Players.Where(player => player.PerformanceScore.HasValue).ToArray();
         detail.Text = scored.Length == 0
             ? "尚未評分"
-            : $"↑ {scored.MaxBy(player => player.PerformanceScore)!.ChampionName}  " +
-              $"↓ {scored.MinBy(player => player.PerformanceScore)!.ChampionName}";
+            : $"本場較高 {scored.MaxBy(player => player.PerformanceScore)!.ChampionName} · " +
+              $"較低 {scored.MinBy(player => player.PerformanceScore)!.ChampionName}";
     }
 
     private void UpdateHistoryControls()
@@ -992,7 +998,7 @@ public sealed class OverlayWindow : Window
             return;
         }
 
-        ProcessPointerActions(_pointer.Handle(new PointerDown(PointerPosition())));
+        ProcessPointerActions(_pointer.HandleDown(PointerPosition()));
         e.Handled = true;
     }
 
@@ -1003,7 +1009,7 @@ public sealed class OverlayWindow : Window
             return;
         }
 
-        ProcessPointerActions(_pointer.Handle(new PointerMove(PointerPosition())));
+        ProcessPointerActions(_pointer.HandleMove(PointerPosition()));
         e.Handled = true;
     }
 
@@ -1014,7 +1020,7 @@ public sealed class OverlayWindow : Window
             return;
         }
 
-        ProcessPointerActions(_pointer.Handle(new PointerUp(PointerPosition())));
+        ProcessPointerActions(_pointer.HandleUp(PointerPosition()));
         e.Handled = true;
     }
 
@@ -1022,20 +1028,20 @@ public sealed class OverlayWindow : Window
     {
         if (!_releasingCapture)
         {
-            ProcessPointerActions(_pointer.Handle(new PointerLostCapture()));
+            ProcessPointerActions(_pointer.HandleLostCapture());
         }
     }
 
-    private void ProcessPointerActions(IReadOnlyList<PointerAction> actions)
+    private void ProcessPointerActions(PointerActionBatch actions)
     {
         foreach (var action in actions)
         {
             switch (action)
             {
-                case CapturePointer:
+                case { Kind: PointerActionKind.CapturePointer }:
                     Mouse.Capture(this, CaptureMode.SubTree);
                     break;
-                case ReleasePointer:
+                case { Kind: PointerActionKind.ReleasePointer }:
                     _releasingCapture = true;
                     try
                     {
@@ -1049,18 +1055,18 @@ public sealed class OverlayWindow : Window
                         _releasingCapture = false;
                     }
                     break;
-                case Click when Mode == OverlayMode.Dot:
+                case { Kind: PointerActionKind.Click } when Mode == OverlayMode.Dot:
                     CycleMode();
                     break;
-                case BeginDrag begin:
+                case { Kind: PointerActionKind.BeginDrag } begin:
                     _dragPointerOrigin = begin.Origin;
                     _dragWindowOrigin = new DipPoint(Left, Top);
                     MoveWindowToPointer(begin.Position);
                     break;
-                case DragTo drag:
+                case { Kind: PointerActionKind.DragTo } drag:
                     MoveWindowToPointer(drag.Position);
                     break;
-                case EndDrag end:
+                case { Kind: PointerActionKind.EndDrag } end:
                     MoveWindowToPointer(end.Position);
                     ClampToVisibleWorkArea();
                     break;
@@ -1128,6 +1134,8 @@ public sealed class OverlayWindow : Window
 
     private void OnClosed(object? sender, EventArgs e)
     {
+        _visualGenerationCancellation.Cancel();
+        _visualGenerationCancellation.Dispose();
         SystemEvents.DisplaySettingsChanged -= OnDisplaySettingsChanged;
         _source?.RemoveHook(WndProc);
     }
@@ -1139,6 +1147,8 @@ public sealed class OverlayWindow : Window
             return;
         }
 
+        var original = new DipPoint(Left, Top);
+        var adjusted = false;
         _clamping = true;
         try
         {
@@ -1148,10 +1158,16 @@ public sealed class OverlayWindow : Window
                 GetWorkAreas());
             Left = result.Position.X;
             Top = result.Position.Y;
+            adjusted = result.Position != original;
         }
         finally
         {
             _clamping = false;
+        }
+
+        if (adjusted && double.IsFinite(Left) && double.IsFinite(Top))
+        {
+            PositionChanged?.Invoke(Left, Top);
         }
     }
 
