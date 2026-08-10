@@ -165,6 +165,33 @@ public sealed class WindowsAdapterTests
         }
     }
 
+    [Fact]
+    public void ParsingKeepsDataDragonUnderscoreChampionIds()
+    {
+        const string json = """
+        {
+          "type": "champion",
+          "data": {
+            "Ezreal": { "id": "Ezreal", "key": "81", "name": "Ezreal", "tags": ["Marksman"] },
+            "Jade_Ezreal": { "id": "Jade_Ezreal", "key": "2081", "name": "Jade Ezreal", "tags": ["Marksman"] }
+          }
+        }
+        """;
+        var byName = new Dictionary<string, ChampionDescriptor>(StringComparer.OrdinalIgnoreCase);
+        var byId = new Dictionary<int, ChampionDescriptor>();
+
+        DataDragonProvider.ParseChampions(json, byName, byId);
+
+        Assert.True(byId.ContainsKey(81));
+        Assert.True(byId.ContainsKey(2081));
+        Assert.Equal("Jade_Ezreal", byId[2081].Key);
+        Assert.Equal("Jade Ezreal", byId[2081].Name);
+        Assert.True(byName.ContainsKey("JadeEzreal"));
+
+        // A parsed key must also survive the gate EnsureChampionIconAsync re-applies before download.
+        Assert.True(StaticAssetPolicy.IsChampionKey(byId[2081].Key));
+    }
+
     private sealed class NullStaticGameDataProvider : IStaticGameDataProvider
     {
         public Task InitializeAsync(CancellationToken cancellationToken) => Task.CompletedTask;

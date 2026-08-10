@@ -6,10 +6,10 @@ namespace LolPerformanceOverlay.Core;
 public static class StaticAssetPolicy
 {
     public static bool IsChampionKey(string? value) =>
-        IsIdentifier(value, maximumLength: 64, allowDot: false);
+        IsIdentifier(value, maximumLength: 64, allowDot: false, allowUnderscore: true);
 
     public static bool IsVersion(string? value) =>
-        IsIdentifier(value, maximumLength: 32, allowDot: true);
+        IsIdentifier(value, maximumLength: 32, allowDot: true, allowUnderscore: false);
 
     public static bool TryResolveChildPath(
         string rootDirectory,
@@ -32,7 +32,10 @@ public static class StaticAssetPolicy
         return true;
     }
 
-    private static bool IsIdentifier(string? value, int maximumLength, bool allowDot)
+    // Data Dragon ships underscore champion ids (the Jade_* set), so rejecting '_' silently drops
+    // them from every name/id lookup and from the icon path. Underscore is safe in both a URI
+    // segment and a file name; escaping the cache root stays blocked by TryResolveChildPath.
+    private static bool IsIdentifier(string? value, int maximumLength, bool allowDot, bool allowUnderscore)
     {
         if (string.IsNullOrWhiteSpace(value) || value.Length > maximumLength)
         {
@@ -41,10 +44,14 @@ public static class StaticAssetPolicy
 
         foreach (var character in value)
         {
-            if (!char.IsAsciiLetterOrDigit(character) && (!allowDot || character != '.'))
+            if (char.IsAsciiLetterOrDigit(character) ||
+                (allowDot && character == '.') ||
+                (allowUnderscore && character == '_'))
             {
-                return false;
+                continue;
             }
+
+            return false;
         }
 
         return true;

@@ -339,7 +339,7 @@ public sealed class DataDragonProvider : IStaticGameDataProvider, IDisposable
         }
     }
 
-    private static void ParseChampions(
+    internal static void ParseChampions(
         string json,
         IDictionary<string, ChampionDescriptor> championsByName,
         IDictionary<int, ChampionDescriptor> championsById)
