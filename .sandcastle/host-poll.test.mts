@@ -35,7 +35,7 @@ test("systemd deployment continuously polls a dedicated clean checkout", async (
   assert.match(service, /UMask=0077/);
   assert.match(timer, /OnUnitInactiveSec=2min/);
   assert.match(timer, /Persistent=true/);
-  assert.match(installer, /\/usr\/bin\/git[\s\S]*clone --branch/);
+  assert.match(installer, /\/usr\/bin\/gh repo clone weib10\/lol-performance-overlay/);
   assert.match(installer, /enable --now lol-performance-overlay-sandcastle\.timer/);
 });
 

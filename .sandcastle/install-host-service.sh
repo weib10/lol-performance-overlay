@@ -25,14 +25,8 @@ if [[ ! -d "${repository_root}/.git" ]]; then
     exit 1
   fi
   /usr/bin/install -d -m 700 "${deployment_root}"
-  /usr/bin/git \
-    -c core.hooksPath=/dev/null \
-    -c core.askPass= \
-    -c credential.helper= \
-    -c credential.https://github.com.helper='!/usr/bin/gh auth git-credential' \
-    -c credential.useHttpPath=true \
-    clone --branch "${base_ref}" --single-branch --no-tags \
-    "${repository_url}" "${repository_root}"
+  /usr/bin/gh repo clone weib10/lol-performance-overlay "${repository_root}" -- \
+    --branch "${base_ref}" --single-branch --no-tags
 fi
 
 cd "${repository_root}"
