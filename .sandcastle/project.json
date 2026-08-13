@@ -11,7 +11,7 @@
     "remote": "origin",
     "fetchUrl": "https://github.com/weib10/lol-performance-overlay.git",
     "pushUrl": "https://github.com/weib10/lol-performance-overlay.git",
-    "baseRef": "main"
+    "baseRef": "agent/linux-usability-release"
   },
   "trustedActor": {
     "login": "weib10",

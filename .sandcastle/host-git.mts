@@ -14,6 +14,11 @@ export interface HostGitRepositoryIdentity {
 export interface HostGit {
   validateRepository(): HostGitRepositoryIdentity;
   validateForDelivery(): HostGitRepositoryIdentity;
+  synchronizeBase(baseRef: string): Promise<{
+    beforeSha: string;
+    afterSha: string;
+    changed: boolean;
+  }>;
   assertNoPreservedWorktree(branch: string): void;
   currentBranch(): string;
   currentHeadSha(): string;
@@ -115,6 +120,11 @@ export function createHostGit(options: {
   async function remoteBranchSha(branch: string): Promise<string | undefined> {
     validateRepositoryIdentity();
     assertIssueBranch(branch);
+    return remoteRefSha(branch);
+  }
+
+  function remoteRefSha(branch: string): string | undefined {
+    assertBaseBranch(branch);
     const output = git(
       "ls-remote",
       "--refs",
@@ -198,12 +208,69 @@ export function createHostGit(options: {
     return { root, commonDir, fetchUrl, pushUrl };
   }
 
+  function assertCleanWorkingTree(): void {
+    const status = git("status", "--porcelain=v1", "--untracked-files=all");
+    if (status.length !== 0) {
+      throw new Error(
+        "The trusted host checkout is not clean; commit or move intended changes before starting an Issue round.",
+      );
+    }
+  }
+
+  function assertCommitExists(sha: string): void {
+    assertSha(sha);
+    const result = tryGit("cat-file", "-e", `${sha}^{commit}`);
+    if (!result.ok) {
+      throw new Error(
+        `The verified GitHub commit ${sha} is not present locally; fetch it explicitly before retrying.`,
+      );
+    }
+  }
+
   return {
     validateRepository() {
       return validateRepositoryIdentity();
     },
     validateForDelivery() {
       return validateRepositoryIdentity();
+    },
+    async synchronizeBase(baseRef) {
+      assertBaseBranch(baseRef);
+      validateRepositoryIdentity();
+      assertCleanWorkingTree();
+      const branch = git("branch", "--show-current").trim();
+      if (branch !== baseRef) {
+        throw new Error(`Host checkout must be on configured base ${baseRef} before synchronization.`);
+      }
+      const beforeSha = normalizeSha(git("rev-parse", "HEAD"));
+      const remoteSha = remoteRefSha(baseRef);
+      if (!remoteSha) {
+        throw new Error(`Configured remote base ${baseRef} does not exist.`);
+      }
+      if (beforeSha === remoteSha) {
+        return { beforeSha, afterSha: remoteSha, changed: false };
+      }
+      git(
+        "fetch",
+        "--no-tags",
+        "--no-write-fetch-head",
+        "--recurse-submodules=no",
+        remote,
+        `refs/heads/${baseRef}`,
+      );
+      assertCommitExists(remoteSha);
+      if (!isAncestor(beforeSha, remoteSha)) {
+        throw new Error(
+          `Configured base ${baseRef} is not a fast-forward of the deployed checkout.`,
+        );
+      }
+      git("merge", "--ff-only", "--no-edit", remoteSha);
+      const afterSha = normalizeSha(git("rev-parse", "HEAD"));
+      if (afterSha !== remoteSha) {
+        throw new Error(`Base synchronization verification failed for ${baseRef}.`);
+      }
+      assertCleanWorkingTree();
+      return { beforeSha, afterSha, changed: true };
     },
     assertNoPreservedWorktree(branch) {
       assertIssueBranch(branch);
@@ -230,21 +297,10 @@ export function createHostGit(options: {
       return git("show", `${sha}:.sandcastle/project.json`);
     },
     assertCleanWorkingTree() {
-      const status = git("status", "--porcelain=v1", "--untracked-files=all");
-      if (status.length !== 0) {
-        throw new Error(
-          "The trusted host checkout is not clean; commit or move intended changes before starting an Issue round.",
-        );
-      }
+      assertCleanWorkingTree();
     },
     assertCommitExists(sha) {
-      assertSha(sha);
-      const result = tryGit("cat-file", "-e", `${sha}^{commit}`);
-      if (!result.ok) {
-        throw new Error(
-          `The verified GitHub commit ${sha} is not present locally; fetch it explicitly before retrying.`,
-        );
-      }
+      assertCommitExists(sha);
     },
     branchSha,
     ensureBranch(branch, startSha, expectedExistingSha) {
@@ -385,6 +441,28 @@ export function assertAllowedHostGitArgs(args: readonly string[]): void {
     return;
   }
 
+  if (command === "fetch") {
+    if (args.length !== 6 || args[1] !== "--no-tags" ||
+        args[2] !== "--no-write-fetch-head" ||
+        args[3] !== "--recurse-submodules=no") {
+      throw new Error("Host Git fetch must use the exact base synchronization form.");
+    }
+    assertRemoteName(args[4]!);
+    if (!/^refs\/heads\/[A-Za-z0-9][A-Za-z0-9._/-]*$/.test(args[5]!) ||
+        args[5]!.includes("..") || args[5]!.endsWith("/")) {
+      throw new Error("Host Git fetch must select one literal base ref.");
+    }
+    return;
+  }
+
+  if (command === "merge") {
+    if (args.length !== 4 || args[1] !== "--ff-only" || args[2] !== "--no-edit") {
+      throw new Error("Host Git merge must be an exact fast-forward.");
+    }
+    assertSha(args[3]!);
+    return;
+  }
+
   if (command === "update-ref") {
     const ref = args[1] ?? "";
     if (args.length < 3 || args.length > 4 ||
@@ -444,6 +522,13 @@ function validateExecutable(path: string): string {
 function assertIssueBranch(branch: string): void {
   if (!/^sandcastle\/issue-[1-9][0-9]*$/.test(branch)) {
     throw new Error(`Invalid Sandcastle Issue branch: ${branch}.`);
+  }
+}
+
+function assertBaseBranch(branch: string): void {
+  if (!/^[A-Za-z0-9][A-Za-z0-9._/-]*$/.test(branch) ||
+      branch.includes("..") || branch.endsWith("/")) {
+    throw new Error(`Invalid configured base branch: ${branch}.`);
   }
 }
 

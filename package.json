@@ -14,6 +14,7 @@
   },
   "scripts": {
     "sandcastle": "tsx .sandcastle/main.mts",
+    "sandcastle:host-poll": "tsx .sandcastle/host-poll.mts",
     "sandcastle:build": "sandcastle docker build-image --image-name lol-performance-overlay-sandcastle:sc0.12.0-codex0.147.0-dotnet8.0.423 --dockerfile .sandcastle/Dockerfile",
     "sandcastle:verify": "tsx .sandcastle/verify-setup.mts",
     "sandcastle:gate": "tsx .sandcastle/project-gate.mts",

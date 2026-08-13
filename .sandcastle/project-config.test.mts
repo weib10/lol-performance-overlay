@@ -7,7 +7,7 @@ import {
   type SandcastleProjectConfig,
 } from "./project-config.mts";
 
-test("checked-in config pins the repository and actors while delivery stays inert", async () => {
+test("checked-in config pins the deployment branch and keeps owner-gated delivery inert", async () => {
   const config = await loadProjectConfig();
   assert.deepEqual(config.repository, {
     host: "github.com",
@@ -17,7 +17,7 @@ test("checked-in config pins the repository and actors while delivery stays iner
     remote: "origin",
     fetchUrl: "https://github.com/weib10/lol-performance-overlay.git",
     pushUrl: "https://github.com/weib10/lol-performance-overlay.git",
-    baseRef: "main",
+    baseRef: "agent/linux-usability-release",
   });
   assert.deepEqual(config.trustedActor, {
     login: "weib10",

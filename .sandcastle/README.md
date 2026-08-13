@@ -54,6 +54,18 @@ npm run sandcastle:test
 npm run sandcastle:smoke
 ```
 
+Owner 將啟用設定合併到 configured base 後，可在 trusted Linux host 安裝專用 clean
+checkout 與兩分鐘 poll timer：
+
+```bash
+.sandcastle/install-host-service.sh
+```
+
+專用 checkout 位於 `${HOME}/.local/share/lol-performance-overlay-sandcastle/repository`。
+每次 poll 先驗證 exact remote 並只允許 fast-forward configured base；dirty、diverged 或
+remote identity 改變都 loud failure。Checked-in delivery 仍為 false 時，timer 只會走
+inert path，不呼叫 `gh`、agent 或任何 GitHub mutation。
+
 `sandcastle:smoke` 只驗證 Docker/Codex no-change 路徑，不讀寫 GitHub。它會把當下
 tracked 與 nonignored untracked 檔案複製到 OS 的暫存目錄，在那裡建立乾淨的
 disposable Git snapshot，並只在該 snapshot 中建立 Sandcastle branch/worktree。
@@ -81,7 +93,7 @@ candidate `HEAD`。
 - Owner／trusted actor：`weib10`（`U_kgDOBZXTGw`）
 - Host delivery actor：`brant92good`（`MDQ6VXNlcjc2ODg0MTc3`，exact `WRITE`）
 - Exact fetch／push URL：`https://github.com/weib10/lol-performance-overlay.git`
-- Base／queue／branch：`main`、`Sandcastle`、`sandcastle/issue-`
+- Base／queue／branch：`agent/linux-usability-release`、`Sandcastle`、`sandcastle/issue-`
 
 在 `delivery.enabled=false` 時，普通執行必須保持 inert：不留言、不改 label、不 push、
 不建立／更新 PR，也不 merge。這是 ownership boundary：`brant92good` 的 collaborator
@@ -108,7 +120,8 @@ npm run sandcastle -- --allow-delivery
 ```
 
 缺少 checked-in `delivery.enabled=true` 或 `--allow-delivery` 任一項時，都不能執行
-GitHub mutation。啟用時 trusted host 必須位於乾淨的 `main`，而且本機 `HEAD` 必須
+GitHub mutation。啟用時 trusted host 必須位於乾淨的
+`agent/linux-usability-release`，而且本機 `HEAD` 必須
 逐位等於 host 重新讀取的 GitHub base SHA；因此 collaborator 自己的 local commit
 不能冒充 owner 授權。啟用後，host worker
 也只能在通過 implementation、project gates、

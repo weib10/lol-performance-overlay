@@ -5,6 +5,7 @@ on:
   pull_request:
     branches:
       - main
+      - agent/linux-usability-release
   push:
     branches:
       - agent/linux-usability-release

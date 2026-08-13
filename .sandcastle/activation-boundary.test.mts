@@ -7,21 +7,21 @@ const BASE = "a".repeat(40);
 
 test("active delivery requires the clean host checkout to be the exact owner base", () => {
   assert.doesNotThrow(() => assertOwnerControlledCheckout({
-    localBranch: "main",
+    localBranch: "agent/linux-usability-release",
     localHeadSha: BASE,
-    expectedBaseRef: "main",
+    expectedBaseRef: "agent/linux-usability-release",
     githubBaseSha: BASE,
   }));
   assert.throws(() => assertOwnerControlledCheckout({
     localBranch: "collaborator/enabled",
     localHeadSha: BASE,
-    expectedBaseRef: "main",
+    expectedBaseRef: "agent/linux-usability-release",
     githubBaseSha: BASE,
-  }), /owner-controlled main branch/);
+  }), /owner-controlled agent\/linux-usability-release branch/);
   assert.throws(() => assertOwnerControlledCheckout({
-    localBranch: "main",
+    localBranch: "agent/linux-usability-release",
     localHeadSha: "b".repeat(40),
-    expectedBaseRef: "main",
+    expectedBaseRef: "agent/linux-usability-release",
     githubBaseSha: BASE,
   }), /exactly equal.*GitHub base SHA/);
 });

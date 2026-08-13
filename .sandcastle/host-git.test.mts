@@ -89,6 +89,44 @@ test("host git validates immutable root/remotes and performs a verified non-forc
   assert.ok(ledger.every((args) => !args.some((arg) => arg.startsWith("--force"))));
 });
 
+test("trusted host fast-forwards its clean configured base and rejects divergence", async () => {
+  const fixture = await gitFixture();
+  git(fixture.work, "push", "origin", "main");
+  const deployed = join(fixture.root, "deployed");
+  execFileSync("/usr/bin/git", ["clone", "--branch", "main", fixture.remote, deployed]);
+  git(deployed, "config", "user.name", "Sandcastle Test");
+  git(deployed, "config", "user.email", "sandcastle@example.invalid");
+  const hostGit = createHostGit({
+    root: deployed,
+    gitPath: "/usr/bin/git",
+    remote: "origin",
+    expectedFetchUrl: fixture.remote,
+    expectedPushUrl: fixture.remote,
+    osHome: userInfo().homedir,
+  });
+
+  await writeFile(join(fixture.work, "remote-next.txt"), "remote next\n");
+  git(fixture.work, "add", "remote-next.txt");
+  git(fixture.work, "commit", "-m", "remote next");
+  git(fixture.work, "push", "origin", "main");
+  const remoteNext = git(fixture.work, "rev-parse", "HEAD").trim();
+
+  assert.deepEqual(await hostGit.synchronizeBase("main"), {
+    beforeSha: fixture.firstSha,
+    afterSha: remoteNext,
+    changed: true,
+  });
+  assert.equal(git(deployed, "rev-parse", "HEAD").trim(), remoteNext);
+
+  await writeFile(join(deployed, "local-only.txt"), "local\n");
+  git(deployed, "add", "local-only.txt");
+  git(deployed, "commit", "-m", "local divergence");
+  await assert.rejects(
+    hostGit.synchronizeBase("main"),
+    /not a fast-forward/,
+  );
+});
+
 test("owner config is read from an exact commit and hidden index state fails closed", async () => {
   const fixture = await gitFixture();
   const configPath = join(fixture.work, ".sandcastle", "project.json");
@@ -334,7 +372,7 @@ async function gitFixture() {
   git(work, "branch", "sandcastle/issue-7");
   git(work, "remote", "add", "origin", remote);
   const firstSha = git(work, "rev-parse", "HEAD").trim();
-  return { remote, work, firstSha };
+  return { root, remote, work, firstSha };
 }
 
 function git(cwd: string, ...args: string[]): string {

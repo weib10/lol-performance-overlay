@@ -38,10 +38,7 @@ test("checked-in unowned-repository config cannot be activated by runtime flags"
   );
   assert.throws(
     () => decideActivation(
-      {
-        ...config,
-        delivery: { enabled: true },
-      },
+      { ...config, delivery: { enabled: true } },
       parseWorkerCli(["--allow-delivery", "--allow-merge"]),
     ),
     /Merge is disabled/,
