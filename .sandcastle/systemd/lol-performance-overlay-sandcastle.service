@@ -1,0 +1,17 @@
+[Unit]
+Description=LoL Performance Overlay Sandcastle GitHub Issue worker
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+Type=oneshot
+WorkingDirectory=%h/.local/share/lol-performance-overlay-sandcastle/repository
+ExecStart=%h/.volta/bin/volta run --node 22.23.2 --npm 10.9.8 npm run sandcastle:host-poll
+UnsetEnvironment=GH_TOKEN GITHUB_TOKEN GH_ENTERPRISE_TOKEN GITHUB_ENTERPRISE_TOKEN COPILOT_GITHUB_TOKEN GITHUB_APP_ID GITHUB_APP_PRIVATE_KEY GITHUB_APP_INSTALLATION_ID GITHUB_APP_CLIENT_ID GITHUB_APP_CLIENT_SECRET GH_HOST GH_REPO GH_CONFIG_DIR
+UMask=0077
+NoNewPrivileges=true
+PrivateTmp=true
+TimeoutStartSec=6h
+
+[Install]
+WantedBy=default.target
