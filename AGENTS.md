@@ -13,6 +13,20 @@
 3. `SECURITY.md`
 4. 與任務直接相關的程式碼和測試
 
+執行或修改 Sandcastle、Issue worker、自主 agent 任務或 sandbox 驗證前，先完整閱讀
+`.sandcastle/README.md`。Sandcastle 任務必須來自選定的 GitHub Issue，使用
+`npm run sandcastle -- --issue N` 或 `Sandcastle` label 佇列；不得退回手動修改
+`.sandcastle/prompt.md` 的 blank runner。所有修改使用 `sandcastle/issue-N` 本機
+branch，並由無 GitHub credential 的 fresh implementation agent、project gates 與
+fresh independent reviewer 依序處理。Host delivery 只有在 repository owner 已提交
+`delivery.enabled=true` 且本次執行明確傳入 `--allow-delivery` 時，才能 non-force
+push 已驗證的 exact SHA、建立／更新唯一 draft PR 和 bounded harness status；預設
+設定必須保持 inert。Merge 另需 checked-in `merge.enabled=true`、本次
+`--allow-merge` 及 trusted actor 的 byte-exact `/sandcastle approve`，並在 merge 前
+重驗不變的 approval、base/head、checks、comments，再以 head SHA compare-and-swap。
+Issue close、deploy、release、publish、branch deletion、force-push、admin merge 與
+auto-merge 永遠不在 worker 權限內。
+
 不要假設文件一定正確；以目前程式碼、實際執行結果和量測為準，發現落差時同步修正文件。
 
 ## 自動審視責任

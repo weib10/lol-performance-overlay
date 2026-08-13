@@ -35,6 +35,14 @@
       "help.op.gg",
       "op.gg"
     ],
+    "buildAndResearchDocumentationHosts": [
+      "registry.npmjs.org",
+      "npmjs.com",
+      "hub.docker.com",
+      "mcr.microsoft.com",
+      "learn.chatgpt.com",
+      "developers.openai.com"
+    ],
     "nonFetchingMarkupNamespaceHosts": [
       "schemas.microsoft.com"
     ]
@@ -45,19 +53,26 @@
       ".vs",
       "artifacts",
       "bin",
+      "node_modules",
       "obj",
       "outputs"
     ],
+    "excludedRelativeDirectories": [
+      ".sandcastle/logs",
+      ".sandcastle/worktrees"
+    ],
     "secretRegexes": [
       "RGAPI-[A-Za-z0-9_-]{20,}",
+      "(?i)\\b(?:ghp_[A-Za-z0-9]{20,}|github_pat_[A-Za-z0-9_]{20,})\\b",
       "-----BEGIN (?:RSA |EC |OPENSSH )?PRIVATE KEY-----",
       "(?i)(?:api[_-]?key|password|secret|cookie|session[_-]?token)\\s*[:=]\\s*[\\\"'][^\\\"'{}$<\\r\\n]{8,}[\\\"']",
+      "(?i)[\\\"']?\\b(?:GH_TOKEN|GITHUB_TOKEN|GH_ENTERPRISE_TOKEN|GITHUB_ENTERPRISE_TOKEN|COPILOT_GITHUB_TOKEN|GITHUB_APP_PRIVATE_KEY|GITHUB_APP_CLIENT_SECRET|CODEX_ACCESS_TOKEN|OPENAI_API_KEY)\\b[\\\"']?\\s*[:=]\\s*(?:[\\\"'](?!\\$\\{|\\$[A-Z_]|\\{\\{|<|process\\.env\\.)[^\\\"'{}$<\\r\\n]{8,}[\\\"']|(?!\\$\\{|\\$[A-Z_]|\\{\\{|<|process\\.env\\.)[A-Za-z0-9_./+=-]{12,})",
       "--remoting-auth-token=(?![<{])[A-Za-z0-9_+/=-]{8,}",
       "(?i)LeagueClient(?:Ux|UxRender)?:[0-9]+:[0-9]+:[^:\\s]{8,}:https?"
     ],
     "developerPathRegexes": [
       "(?i)[A-Z]:\\\\Users\\\\[^\\\\\"'\\r\\n]+",
-      "/home/[^/\\s]+/",
+      "/home/(?!agent/)[^/\\s]+/",
       "/Users/[^/\\s]+/"
     ],
     "rawOverlayFieldNames": [

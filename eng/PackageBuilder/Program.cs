@@ -162,6 +162,7 @@ internal static class PackageBuilder
     private static void ValidateConfiguration(BuildContext context)
     {
         var config = context.Config;
+        ValidateNetworkHostClassifications(config.Network);
         if (!string.Equals(config.Paths.WorkDirectory, "artifacts/package", StringComparison.Ordinal) ||
             !string.Equals(config.Paths.OutputDirectory, "outputs", StringComparison.Ordinal))
         {
@@ -384,11 +385,7 @@ internal static class PackageBuilder
         var scanFiles = EnumerateRepositoryFiles(context).ToArray();
         var secretRegexes = CompileRegexes(config.Scan.SecretRegexes);
         var pathRegexes = CompileRegexes(config.Scan.DeveloperPathRegexes);
-        var knownHosts = config.Network.RuntimeHosts
-            .Concat(config.Network.UserInitiatedBrowserHosts)
-            .Concat(config.Network.DocumentationHosts)
-            .Concat(config.Network.NonFetchingMarkupNamespaceHosts)
-            .ToHashSet(StringComparer.OrdinalIgnoreCase);
+        var knownHosts = RepositoryUrlHosts(config.Network);
         var violations = new HashSet<string>(StringComparer.Ordinal);
 
         foreach (var path in scanFiles)
@@ -435,13 +432,98 @@ internal static class PackageBuilder
     private static IEnumerable<string> EnumerateRepositoryFiles(BuildContext context)
     {
         var config = context.Config;
-        var excluded = config.Scan.ExcludedDirectories.ToHashSet(StringComparer.OrdinalIgnoreCase);
+        return EnumerateRepositoryFiles(
+            context.Root,
+            config.Scan.ExcludedDirectories,
+            config.Scan.ExcludedRelativeDirectories);
+    }
 
-        return Directory.EnumerateFiles(context.Root, "*", SearchOption.AllDirectories)
-            .Where(path => !Path.GetRelativePath(context.Root, path)
-                .Split(Path.DirectorySeparatorChar, Path.AltDirectorySeparatorChar)
-                .Any(segment => excluded.Contains(segment)))
-            .OrderBy(path => path, StringComparer.Ordinal);
+    internal static IEnumerable<string> EnumerateRepositoryFiles(
+        string root,
+        IReadOnlyCollection<string> excludedDirectoryNames,
+        IReadOnlyCollection<string> excludedRelativeDirectories)
+    {
+        var pendingDirectories = new Stack<string>();
+        pendingDirectories.Push(root);
+        var files = new List<string>();
+
+        while (pendingDirectories.TryPop(out var directory))
+        {
+            files.AddRange(Directory.EnumerateFiles(directory));
+            foreach (var childDirectory in Directory.EnumerateDirectories(directory))
+            {
+                if (!IsRepositoryScanPathExcluded(
+                        Path.GetRelativePath(root, childDirectory),
+                        excludedDirectoryNames,
+                        excludedRelativeDirectories))
+                {
+                    pendingDirectories.Push(childDirectory);
+                }
+            }
+        }
+
+        return files.OrderBy(path => path, StringComparer.Ordinal);
+    }
+
+    internal static bool IsRepositoryScanPathExcluded(
+        string relativePath,
+        IReadOnlyCollection<string> excludedDirectoryNames,
+        IReadOnlyCollection<string> excludedRelativeDirectories)
+    {
+        var normalizedPath = relativePath.Replace('\\', '/').TrimStart('/');
+        var excludedNames = excludedDirectoryNames.ToHashSet(StringComparer.OrdinalIgnoreCase);
+        if (normalizedPath.Split('/', StringSplitOptions.RemoveEmptyEntries)
+            .Any(segment => excludedNames.Contains(segment)))
+        {
+            return true;
+        }
+
+        return excludedRelativeDirectories.Any(excluded =>
+        {
+            var normalizedExcluded = excluded.Replace('\\', '/').Trim('/');
+            return normalizedExcluded.Length != 0 &&
+                (string.Equals(normalizedPath, normalizedExcluded, StringComparison.OrdinalIgnoreCase) ||
+                 normalizedPath.StartsWith(normalizedExcluded + "/", StringComparison.OrdinalIgnoreCase));
+        });
+    }
+
+    internal static IReadOnlySet<string> RepositoryUrlHosts(NetworkConfig config) =>
+        config.RuntimeHosts
+            .Concat(config.UserInitiatedBrowserHosts)
+            .Concat(config.DocumentationHosts)
+            .Concat(config.BuildAndResearchDocumentationHosts)
+            .Concat(config.NonFetchingMarkupNamespaceHosts)
+            .ToHashSet(StringComparer.OrdinalIgnoreCase);
+
+    internal static IReadOnlySet<string> ProductUrlHosts(
+        NetworkConfig config,
+        bool includeNonFetchingMarkupNamespaceHosts)
+    {
+        var hosts = config.RuntimeHosts
+            .Concat(config.UserInitiatedBrowserHosts)
+            .Concat(config.DocumentationHosts);
+        if (includeNonFetchingMarkupNamespaceHosts)
+        {
+            hosts = hosts.Concat(config.NonFetchingMarkupNamespaceHosts);
+        }
+
+        return hosts.ToHashSet(StringComparer.OrdinalIgnoreCase);
+    }
+
+    internal static void ValidateNetworkHostClassifications(NetworkConfig config)
+    {
+        var productHosts = ProductUrlHosts(config, includeNonFetchingMarkupNamespaceHosts: true);
+        var overlappingHosts = config.BuildAndResearchDocumentationHosts
+            .Where(productHosts.Contains)
+            .Distinct(StringComparer.OrdinalIgnoreCase)
+            .OrderBy(host => host, StringComparer.OrdinalIgnoreCase)
+            .ToArray();
+        if (overlappingHosts.Length != 0)
+        {
+            throw new InvalidDataException(
+                "Build/research-only documentation hosts must not be classified as shipped product hosts: " +
+                string.Join(", ", overlappingHosts));
+        }
     }
 
     internal static IEnumerable<string> DecodeScanViews(byte[] bytes)
@@ -1029,11 +1111,9 @@ internal static class PackageBuilder
         }
 
         var config = context.Config;
-        var knownHosts = config.Network.RuntimeHosts
-            .Concat(config.Network.UserInitiatedBrowserHosts)
-            .Concat(config.Network.DocumentationHosts)
-            .Concat(config.Network.NonFetchingMarkupNamespaceHosts)
-            .ToHashSet(StringComparer.OrdinalIgnoreCase);
+        var knownHosts = ProductUrlHosts(
+            config.Network,
+            includeNonFetchingMarkupNamespaceHosts: true);
         var sensitivePatterns = CompileRegexes(config.Scan.SecretRegexes.Concat(config.Scan.DeveloperPathRegexes));
         var violations = new HashSet<string>(StringComparer.Ordinal);
         foreach (var path in assemblies)
@@ -1385,10 +1465,9 @@ internal static class PackageBuilder
 
         ValidateOfflineHtml(guide);
 
-        var allowedGuideHosts = config.Network.RuntimeHosts
-            .Concat(config.Network.UserInitiatedBrowserHosts)
-            .Concat(config.Network.DocumentationHosts)
-            .ToHashSet(StringComparer.OrdinalIgnoreCase);
+        var allowedGuideHosts = ProductUrlHosts(
+            config.Network,
+            includeNonFetchingMarkupNamespaceHosts: false);
         var violations = new List<string>();
         ValidateUrlHosts(violations, config.Product.FriendGuideFileName, guide, allowedGuideHosts);
         AddRegexViolations(violations, config.Product.FriendGuideFileName, guide, CompileRegexes(config.Scan.SecretRegexes), "secret-like value");
@@ -1838,12 +1917,14 @@ internal sealed class NetworkConfig
     public string[] RuntimeHosts { get; init; } = [];
     public string[] UserInitiatedBrowserHosts { get; init; } = [];
     public string[] DocumentationHosts { get; init; } = [];
+    public string[] BuildAndResearchDocumentationHosts { get; init; } = [];
     public string[] NonFetchingMarkupNamespaceHosts { get; init; } = [];
 }
 
 internal sealed class ScanConfig
 {
     public string[] ExcludedDirectories { get; init; } = [];
+    public string[] ExcludedRelativeDirectories { get; init; } = [];
     public string[] SecretRegexes { get; init; } = [];
     public string[] DeveloperPathRegexes { get; init; } = [];
     public string[] RawOverlayFieldNames { get; init; } = [];

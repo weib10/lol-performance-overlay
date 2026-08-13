@@ -1,5 +1,6 @@
 using System.Text;
 using System.Text.Json;
+using System.Text.RegularExpressions;
 using Xunit;
 
 namespace PackageBuilderPolicy.Tests;
@@ -43,6 +44,151 @@ public sealed class PackagePolicyTests
         Assert.Contains(
             PackageBuilder.DecodeScanViews(bytes),
             view => view.Contains(syntheticSensitiveValue, StringComparison.Ordinal));
+    }
+
+    [Fact]
+    public void RepositoryScanExcludesDependenciesAndSandcastleRuntimeOutputsOnly()
+    {
+        var repositoryRoot = FindRepositoryRoot();
+        using var document = ReadPackageConfig(repositoryRoot);
+        var scan = document.RootElement.GetProperty("scan");
+        var excludedDirectoryNames = ReadStrings(scan, "excludedDirectories");
+        var excludedRelativeDirectories = ReadStrings(scan, "excludedRelativeDirectories");
+
+        Assert.True(PackageBuilder.IsRepositoryScanPathExcluded(
+            "node_modules/@ai-hero/sandcastle/package.json",
+            excludedDirectoryNames,
+            excludedRelativeDirectories));
+        Assert.True(PackageBuilder.IsRepositoryScanPathExcluded(
+            ".sandcastle/logs/smoke-test.log",
+            excludedDirectoryNames,
+            excludedRelativeDirectories));
+        Assert.True(PackageBuilder.IsRepositoryScanPathExcluded(
+            ".sandcastle/logs/issue-worker/state.json",
+            excludedDirectoryNames,
+            excludedRelativeDirectories));
+        Assert.True(PackageBuilder.IsRepositoryScanPathExcluded(
+            ".sandcastle/logs/issue-worker/worker.lock",
+            excludedDirectoryNames,
+            excludedRelativeDirectories));
+        Assert.True(PackageBuilder.IsRepositoryScanPathExcluded(
+            ".sandcastle/worktrees/smoke-test/README.md",
+            excludedDirectoryNames,
+            excludedRelativeDirectories));
+        Assert.False(PackageBuilder.IsRepositoryScanPathExcluded(
+            ".sandcastle/Dockerfile",
+            excludedDirectoryNames,
+            excludedRelativeDirectories));
+        Assert.False(PackageBuilder.IsRepositoryScanPathExcluded(
+            ".sandcastle/config.ts",
+            excludedDirectoryNames,
+            excludedRelativeDirectories));
+        Assert.False(PackageBuilder.IsRepositoryScanPathExcluded(
+            ".sandcastle/issue-worker.mts",
+            excludedDirectoryNames,
+            excludedRelativeDirectories));
+        Assert.False(PackageBuilder.IsRepositoryScanPathExcluded(
+            ".sandcastle/issue-worker-prompt.md",
+            excludedDirectoryNames,
+            excludedRelativeDirectories));
+        Assert.False(PackageBuilder.IsRepositoryScanPathExcluded(
+            "docs/logs/retention-policy.md",
+            excludedDirectoryNames,
+            excludedRelativeDirectories));
+    }
+
+    [Fact]
+    public void RepositoryFileEnumerationDoesNotDescendIntoSandcastleRuntimeDirectories()
+    {
+        var repositoryRoot = FindRepositoryRoot();
+        using var document = ReadPackageConfig(repositoryRoot);
+        var scan = document.RootElement.GetProperty("scan");
+        var excludedDirectoryNames = ReadStrings(scan, "excludedDirectories");
+        var excludedRelativeDirectories = ReadStrings(scan, "excludedRelativeDirectories");
+        var syntheticRoot = Path.Combine(Path.GetTempPath(), $"package-scan-{Guid.NewGuid():N}");
+
+        try
+        {
+            WriteSyntheticFile(syntheticRoot, ".sandcastle/config.ts");
+            WriteSyntheticFile(syntheticRoot, ".sandcastle/logs/run.log");
+            WriteSyntheticFile(syntheticRoot, ".sandcastle/logs/issue-worker/state.json");
+            WriteSyntheticFile(syntheticRoot, ".sandcastle/logs/issue-worker/worker.lock");
+            WriteSyntheticFile(syntheticRoot, ".sandcastle/worktrees/run/README.md");
+            WriteSyntheticFile(syntheticRoot, ".sandcastle/issue-worker.mts");
+            WriteSyntheticFile(syntheticRoot, ".sandcastle/issue-worker-prompt.md");
+            WriteSyntheticFile(syntheticRoot, "node_modules/dependency/package.json");
+            WriteSyntheticFile(syntheticRoot, "docs/logs/retention-policy.md");
+
+            var relativeFiles = PackageBuilder.EnumerateRepositoryFiles(
+                    syntheticRoot,
+                    excludedDirectoryNames,
+                    excludedRelativeDirectories)
+                .Select(path => Path.GetRelativePath(syntheticRoot, path).Replace('\\', '/'))
+                .ToArray();
+
+            Assert.Equal(
+                [
+                    ".sandcastle/config.ts",
+                    ".sandcastle/issue-worker-prompt.md",
+                    ".sandcastle/issue-worker.mts",
+                    "docs/logs/retention-policy.md"
+                ],
+                relativeFiles);
+        }
+        finally
+        {
+            if (Directory.Exists(syntheticRoot))
+            {
+                Directory.Delete(syntheticRoot, recursive: true);
+            }
+        }
+    }
+
+    [Fact]
+    public void SandcastleSupplyChainHostsAreRepositoryOnlyAndNeverShippedProductHosts()
+    {
+        var repositoryRoot = FindRepositoryRoot();
+        using var document = ReadPackageConfig(repositoryRoot);
+        var config = ReadNetworkConfig(document.RootElement.GetProperty("network"));
+        string[] expectedBuildAndResearchHosts =
+        [
+            "registry.npmjs.org",
+            "npmjs.com",
+            "hub.docker.com",
+            "mcr.microsoft.com",
+            "learn.chatgpt.com",
+            "developers.openai.com"
+        ];
+
+        PackageBuilder.ValidateNetworkHostClassifications(config);
+        var repositoryHosts = PackageBuilder.RepositoryUrlHosts(config);
+        var productHosts = PackageBuilder.ProductUrlHosts(
+            config,
+            includeNonFetchingMarkupNamespaceHosts: true);
+
+        Assert.Equal(expectedBuildAndResearchHosts, config.BuildAndResearchDocumentationHosts);
+        foreach (var host in expectedBuildAndResearchHosts)
+        {
+            Assert.Contains(host, repositoryHosts);
+            Assert.DoesNotContain(host, productHosts);
+        }
+    }
+
+    [Fact]
+    public void CanonicalSandcastleContainerHomeIsNotADeveloperPath()
+    {
+        var patterns = ReadDeveloperPathPatterns();
+
+        Assert.DoesNotContain(patterns, pattern => pattern.IsMatch("/home/agent/worktree/README.md"));
+    }
+
+    [Fact]
+    public void NonCanonicalHomeDirectoryRemainsARejectedDeveloperPath()
+    {
+        var patterns = ReadDeveloperPathPatterns();
+        var developerPath = string.Concat("/home/", "developer-name", "/project/README.md");
+
+        Assert.Contains(patterns, pattern => pattern.IsMatch(developerPath));
     }
 
     [Fact]
@@ -247,11 +393,18 @@ public sealed class PackagePolicyTests
         var scan = document.RootElement.GetProperty("scan");
         var prefixes = ReadStrings(scan, "syntheticGameNamePrefixes");
         var tagLines = ReadStrings(scan, "syntheticTagLines");
+        var excludedDirectoryNames = ReadStrings(scan, "excludedDirectories");
+        var excludedRelativeDirectories = ReadStrings(scan, "excludedRelativeDirectories");
         var violations = new HashSet<string>(StringComparer.Ordinal);
 
-        foreach (var path in Directory.EnumerateFiles(repositoryRoot, "*.cs", SearchOption.AllDirectories)
-                     .Where(path => !path.Split(Path.DirectorySeparatorChar)
-                         .Any(segment => segment is "bin" or "obj" or "artifacts" or "outputs")))
+        foreach (var path in PackageBuilder.EnumerateRepositoryFiles(
+                     repositoryRoot,
+                     excludedDirectoryNames,
+                     excludedRelativeDirectories)
+                 .Where(path => string.Equals(
+                     Path.GetExtension(path),
+                     ".cs",
+                     StringComparison.OrdinalIgnoreCase)))
         {
             string source;
             try
@@ -279,20 +432,59 @@ public sealed class PackagePolicyTests
     [Fact]
     public void ConfiguredSecretPatternsDetectSyntheticLcuLockfile()
     {
-        var repositoryRoot = FindRepositoryRoot();
-        using var document = ReadPackageConfig(repositoryRoot);
-        var patterns = document.RootElement
-            .GetProperty("scan")
-            .GetProperty("secretRegexes")
-            .EnumerateArray()
-            .Select(element => element.GetString()!)
-            .ToArray();
         var processName = string.Concat("League", "Client", "Ux");
         var syntheticLockfile = string.Join(':', processName, "1234", "2999", new string('S', 24), "https");
 
         Assert.Contains(
-            PackageBuilder.CompileRegexes(patterns),
+            ReadSecretPatterns(),
             pattern => pattern.IsMatch(syntheticLockfile));
+    }
+
+    [Fact]
+    public void ConfiguredSecretPatternsDetectAgentAndGitHubCredentials()
+    {
+        var credentialSamples = new[]
+        {
+            string.Concat("GH", "_TOKEN=\"", new string('G', 24), "\""),
+            string.Concat("GITHUB", "_TOKEN=", new string('H', 24)),
+            string.Concat("CODEX", "_ACCESS_TOKEN=eyJ", new string('C', 24), ".segment"),
+            string.Concat("COPILOT", "_GITHUB_TOKEN=", new string('K', 24)),
+            string.Concat("GITHUB", "_APP_PRIVATE_KEY=", new string('Q', 32)),
+            string.Concat("OPEN", "AI", "_API", "_KEY=", new string('O', 24)),
+            string.Concat("\"GITHUB", "_TOKEN\": \"", new string('J', 24), "\""),
+            string.Concat("gh", "p_", new string('P', 36)),
+            string.Concat("github", "_pat_", new string('F', 80))
+        };
+        var patterns = ReadSecretPatterns();
+
+        foreach (var sample in credentialSamples)
+        {
+            Assert.Contains(patterns, pattern => pattern.IsMatch(sample));
+        }
+    }
+
+    [Fact]
+    public void ConfiguredSecretPatternsAllowCredentialReferencesAndPlaceholders()
+    {
+        string[] safeReferences =
+        [
+            "GH_TOKEN=${GH_TOKEN}",
+            "GITHUB_TOKEN: \"${GITHUB_TOKEN}\"",
+            "\"GH_TOKEN\": \"${GH_TOKEN}\"",
+            "CODEX_ACCESS_TOKEN: process.env.CODEX_ACCESS_TOKEN",
+            "GH_TOKEN=$GH_TOKEN",
+            "GITHUB_TOKEN=<provided-by-host>",
+            "CODEX_ACCESS_TOKEN={{CODEX_ACCESS_TOKEN}}",
+            "COPILOT_GITHUB_TOKEN=${COPILOT_GITHUB_TOKEN}",
+            "GITHUB_APP_PRIVATE_KEY=<provided-by-host>",
+            "OPENAI_API_KEY=process.env.OPENAI_API_KEY"
+        ];
+        var patterns = ReadSecretPatterns();
+
+        foreach (var reference in safeReferences)
+        {
+            Assert.DoesNotContain(patterns, pattern => pattern.IsMatch(reference));
+        }
     }
 
     private static string FindRepositoryRoot()
@@ -313,6 +505,38 @@ public sealed class PackagePolicyTests
 
     private static JsonDocument ReadPackageConfig(string repositoryRoot) =>
         JsonDocument.Parse(File.ReadAllText(Path.Combine(repositoryRoot, "eng", "package-config.json")));
+
+    private static Regex[] ReadDeveloperPathPatterns()
+    {
+        var repositoryRoot = FindRepositoryRoot();
+        using var document = ReadPackageConfig(repositoryRoot);
+        var patterns = ReadStrings(document.RootElement.GetProperty("scan"), "developerPathRegexes");
+        return PackageBuilder.CompileRegexes(patterns);
+    }
+
+    private static Regex[] ReadSecretPatterns()
+    {
+        var repositoryRoot = FindRepositoryRoot();
+        using var document = ReadPackageConfig(repositoryRoot);
+        var patterns = ReadStrings(document.RootElement.GetProperty("scan"), "secretRegexes");
+        return PackageBuilder.CompileRegexes(patterns);
+    }
+
+    private static NetworkConfig ReadNetworkConfig(JsonElement network) => new()
+    {
+        RuntimeHosts = ReadStrings(network, "runtimeHosts"),
+        UserInitiatedBrowserHosts = ReadStrings(network, "userInitiatedBrowserHosts"),
+        DocumentationHosts = ReadStrings(network, "documentationHosts"),
+        BuildAndResearchDocumentationHosts = ReadStrings(network, "buildAndResearchDocumentationHosts"),
+        NonFetchingMarkupNamespaceHosts = ReadStrings(network, "nonFetchingMarkupNamespaceHosts")
+    };
+
+    private static void WriteSyntheticFile(string root, string relativePath)
+    {
+        var path = Path.Combine(root, relativePath.Replace('/', Path.DirectorySeparatorChar));
+        Directory.CreateDirectory(Path.GetDirectoryName(path)!);
+        File.WriteAllText(path, "synthetic");
+    }
 
     private static string[] ReadStrings(JsonElement parent, string propertyName) =>
         parent.GetProperty(propertyName)
