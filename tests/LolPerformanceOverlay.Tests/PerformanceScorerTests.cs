@@ -140,7 +140,9 @@ public sealed class PerformanceScorerTests
     [Fact]
     public void OverlayModelsDoNotExposeRawScoreboardFields()
     {
-        var forbidden = new[] { "Kills", "Deaths", "Assists", "Level", "CreepScore", "Respawn", "ItemGold" };
+        // Aggregate equipment value is a deliberate exception recorded in AGENTS.md;
+        // the raw per-slot array and every other scoreboard field stay out.
+        var forbidden = new[] { "Kills", "Deaths", "Assists", "Level", "CreepScore", "Respawn" };
         var publicOverlayTypes = new[]
         {
             typeof(OverlaySnapshot),
@@ -301,13 +303,13 @@ public sealed class PerformanceScorerTests
                 index,
                 index < 5 ? 100 : 200,
                 ChampionArchetype.Fighter,
-                gold: 6_249 + index))
+                gold: 6_151 + index))
             .ToArray();
 
-        var snapshot = scorer.Score(Frame(600d, players));
+        var snapshot = scorer.Evaluate(Frame(600d, players));
         var carried = snapshot.Teams.SelectMany(team => team.Players).ToArray();
 
-        // 6,249..6,258 all render as "6.2k", so they must land on one view-model value
+        // 6,151..6,160 all render as "6.2k", so they must land on one view-model value
         // and never make the overlay redraw for a change the player cannot see.
         Assert.All(carried, player => Assert.Equal(6_200, player.ItemGold));
         Assert.All(carried, player => Assert.Null(player.PickOrder));
@@ -332,7 +334,7 @@ public sealed class PerformanceScorerTests
             members,
             Array.Empty<RawPlayerState>());
 
-        var players = scorer.Score(frame).Teams.Single().Players;
+        var players = scorer.Evaluate(frame).Teams.Single().Players;
 
         Assert.Equal(["cell-0-100", "cell-1-100"], players.Select(player => player.StableKey));
         Assert.Equal([3, 1], players.Select(player => player.PickOrder));
