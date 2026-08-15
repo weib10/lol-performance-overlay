@@ -94,10 +94,10 @@ public sealed record OverlayPlayer(
     // Champ select only: this cell's place in the pick sequence, so a position swap
     // does not lose who picked before whom. Null when the client did not report it.
     int? PickOrder = null,
-    // Live game only: the summed shop value of the items this player is carrying.
-    // Derived from items the in-game scoreboard already shows and static Data Dragon
+    // Live game only: the summed shop value of the equipment this player is carrying.
+    // Derived from what the in-game scoreboard already shows plus static Data Dragon
     // prices; it is not the player's unspent gold, which the client does not expose
-    // for anyone but the local player.
+    // for anyone but the local player. Aggregate only -- never the raw array.
     int? ItemGold = null);
 
 public sealed record OverlayTeam(

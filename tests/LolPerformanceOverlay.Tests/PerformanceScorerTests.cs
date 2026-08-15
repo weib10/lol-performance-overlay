@@ -319,8 +319,8 @@ public sealed class PerformanceScorerTests
         var scorer = new PerformanceScorer();
         var members = new[]
         {
-            new ChampSelectMember("cell-0-100", "A#TW2", 100, 1, "Annie", null, false, 3),
-            new ChampSelectMember("cell-1-100", "B#TW2", 100, 2, "Olaf", null, false, 1)
+            new ChampSelectMember("cell-0-100", "Player 0#TW2", 100, 1, "Annie", null, false, 3),
+            new ChampSelectMember("cell-1-100", "Player 1#TW2", 100, 2, "Olaf", null, false, 1)
         };
         var frame = new LeagueSessionFrame(
             LeaguePhase.ChampSelect,
@@ -328,7 +328,7 @@ public sealed class PerformanceScorerTests
             0d,
             "CLASSIC",
             420,
-            "A#TW2",
+            "Player 0#TW2",
             members,
             Array.Empty<RawPlayerState>());
 

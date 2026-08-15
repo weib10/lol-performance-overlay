@@ -811,9 +811,9 @@ public sealed class OverlayWindow : Window
     }
 
     /// <summary>
-    /// Pick number during champ select, carried item value during a game. Labelled
+    /// Pick number during champ select, carried equipment value during a game. Labelled
     /// 裝備值 rather than 經濟 because the client only reports unspent gold for the
-    /// local player, so this is the shop value of items on the board and nothing more.
+    /// local player, so this is shop value on the board and nothing more.
     /// </summary>
     private static void UpdatePlayerMeta(PlayerRowView view, OverlayPlayer player)
     {
