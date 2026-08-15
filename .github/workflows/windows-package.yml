@@ -8,6 +8,7 @@ on:
       - agent/linux-usability-release
   push:
     branches:
+      - main
       - agent/linux-usability-release
 
 permissions:
