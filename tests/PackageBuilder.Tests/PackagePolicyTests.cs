@@ -53,34 +53,28 @@ public sealed class PackagePolicyTests
         using var document = ReadPackageConfig(repositoryRoot);
         var scan = document.RootElement.GetProperty("scan");
         var excludedDirectoryNames = ReadStrings(scan, "excludedDirectories");
-        var excludedRelativeDirectories = ReadStrings(scan, "excludedRelativeDirectories");
 
         // node_modules is not produced by this repository any more, but a stale
         // install left in a working checkout must not be walked or scanned.
         Assert.True(PackageBuilder.IsRepositoryScanPathExcluded(
             "node_modules/some-package/package.json",
-            excludedDirectoryNames,
-            excludedRelativeDirectories));
+            excludedDirectoryNames));
         Assert.True(PackageBuilder.IsRepositoryScanPathExcluded(
             "src/LolPerformanceOverlay/obj/project.assets.json",
-            excludedDirectoryNames,
-            excludedRelativeDirectories));
+            excludedDirectoryNames));
         Assert.True(PackageBuilder.IsRepositoryScanPathExcluded(
             "artifacts/package/publish",
-            excludedDirectoryNames,
-            excludedRelativeDirectories));
+            excludedDirectoryNames));
         Assert.False(PackageBuilder.IsRepositoryScanPathExcluded(
             "eng/PackageBuilder/Program.cs",
-            excludedDirectoryNames,
-            excludedRelativeDirectories));
+            excludedDirectoryNames));
+        // "logs" is a path segment, not an excluded directory name.
         Assert.False(PackageBuilder.IsRepositoryScanPathExcluded(
             "docs/logs/retention-policy.md",
-            excludedDirectoryNames,
-            excludedRelativeDirectories));
+            excludedDirectoryNames));
         Assert.False(PackageBuilder.IsRepositoryScanPathExcluded(
             "src/LolPerformanceOverlay.Core/Models.cs",
-            excludedDirectoryNames,
-            excludedRelativeDirectories));
+            excludedDirectoryNames));
     }
 
     [Fact]
@@ -90,7 +84,6 @@ public sealed class PackagePolicyTests
         using var document = ReadPackageConfig(repositoryRoot);
         var scan = document.RootElement.GetProperty("scan");
         var excludedDirectoryNames = ReadStrings(scan, "excludedDirectories");
-        var excludedRelativeDirectories = ReadStrings(scan, "excludedRelativeDirectories");
         var syntheticRoot = Path.Combine(Path.GetTempPath(), $"package-scan-{Guid.NewGuid():N}");
 
         try
@@ -104,8 +97,7 @@ public sealed class PackagePolicyTests
 
             var relativeFiles = PackageBuilder.EnumerateRepositoryFiles(
                     syntheticRoot,
-                    excludedDirectoryNames,
-                    excludedRelativeDirectories)
+                    excludedDirectoryNames)
                 .Select(path => Path.GetRelativePath(syntheticRoot, path).Replace('\\', '/'))
                 .ToArray();
 
@@ -125,30 +117,19 @@ public sealed class PackagePolicyTests
         }
     }
 
-    [Fact]
-    public void EveryPosixHomeDirectoryIsARejectedDeveloperPath()
+    // The sandbox home was exempt while the Issue worker lived here. That exemption
+    // went with it, so no /home path may reach an assembly, the guide, or the ZIP.
+    //
+    // The path is assembled with string.Concat so this test file does not itself hold
+    // a literal the repository developer-path scan would flag: only the rules file is
+    // exempt from that scan, so writing one out breaks the release gate.
+    [Theory]
+    [InlineData("agent")]
+    [InlineData("developer-name")]
+    public void EveryPosixHomeDirectoryIsARejectedDeveloperPath(string account)
     {
         var patterns = ReadDeveloperPathPatterns();
-        var containerHome = string.Concat("/home/", "agent", "/worktree/README.md");
-        var violations = new List<string>();
-
-        PackageBuilder.AddRegexViolations(
-            violations,
-            "Program.cs",
-            containerHome,
-            patterns,
-            "developer machine path");
-
-        // The sandbox exemption existed only for the removed Issue worker. No path
-        // under /home is allowed to reach a shipped assembly, guide, or ZIP again.
-        Assert.Single(violations);
-    }
-
-    [Fact]
-    public void NonCanonicalHomeDirectoryRemainsARejectedDeveloperPath()
-    {
-        var patterns = ReadDeveloperPathPatterns();
-        var developerPath = string.Concat("/home/", "developer-name", "/project/README.md");
+        var developerPath = string.Concat("/home/", account, "/project/README.md");
 
         Assert.Contains(patterns, pattern => pattern.IsMatch(developerPath));
     }
@@ -387,13 +368,11 @@ public sealed class PackagePolicyTests
         var prefixes = ReadStrings(scan, "syntheticGameNamePrefixes");
         var tagLines = ReadStrings(scan, "syntheticTagLines");
         var excludedDirectoryNames = ReadStrings(scan, "excludedDirectories");
-        var excludedRelativeDirectories = ReadStrings(scan, "excludedRelativeDirectories");
         var violations = new HashSet<string>(StringComparer.Ordinal);
 
         foreach (var path in PackageBuilder.EnumerateRepositoryFiles(
                      repositoryRoot,
-                     excludedDirectoryNames,
-                     excludedRelativeDirectories)
+                     excludedDirectoryNames)
                  .Where(path => string.Equals(
                      Path.GetExtension(path),
                      ".cs",

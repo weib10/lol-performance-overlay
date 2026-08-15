@@ -19,6 +19,12 @@ boundary 依賴 base branch 的 protection，而 worker 無法自行驗證，因
 重新引入會自動 push、開 PR、merge 或在主機上定時執行 repository 程式碼的機制；需要
 時請先和使用者確認。
 
+該 worker 是這個 repository 唯一用過 Node 的東西，`package.json` 已隨它移除。但
+`node_modules` 仍然刻意留在 `.gitignore` 和 `eng/package-config.json` 的
+`scan.excludedDirectories` 裡：既有 checkout 裡可能還躺著一份舊安裝，少了這兩個項目，
+release gate 的乾淨 Git tree 檢查會失敗，repository scan 也會去走那幾千個依賴檔。看到
+它們不是漏刪，不要順手拿掉。
+
 不要假設文件一定正確；以目前程式碼、實際執行結果和量測為準，發現落差時同步修正文件。
 
 ## 自動審視責任

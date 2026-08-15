@@ -384,7 +384,7 @@ internal static class PackageBuilder
         var scanFiles = EnumerateRepositoryFiles(context).ToArray();
         var secretRegexes = CompileRegexes(config.Scan.SecretRegexes);
         var pathRegexes = CompileRegexes(config.Scan.DeveloperPathRegexes);
-        var knownHosts = RepositoryUrlHosts(config.Network);
+        var knownHosts = ProductUrlHosts(config.Network, includeNonFetchingMarkupNamespaceHosts: true);
         var violations = new HashSet<string>(StringComparer.Ordinal);
 
         foreach (var path in scanFiles)
@@ -428,19 +428,12 @@ internal static class PackageBuilder
         Console.WriteLine("NOTE: this is static literal evidence; runtime enforcement is an application policy verified separately by core tests.");
     }
 
-    private static IEnumerable<string> EnumerateRepositoryFiles(BuildContext context)
-    {
-        var config = context.Config;
-        return EnumerateRepositoryFiles(
-            context.Root,
-            config.Scan.ExcludedDirectories,
-            config.Scan.ExcludedRelativeDirectories);
-    }
+    private static IEnumerable<string> EnumerateRepositoryFiles(BuildContext context) =>
+        EnumerateRepositoryFiles(context.Root, context.Config.Scan.ExcludedDirectories);
 
     internal static IEnumerable<string> EnumerateRepositoryFiles(
         string root,
-        IReadOnlyCollection<string> excludedDirectoryNames,
-        IReadOnlyCollection<string> excludedRelativeDirectories)
+        IReadOnlyCollection<string> excludedDirectoryNames)
     {
         var pendingDirectories = new Stack<string>();
         pendingDirectories.Push(root);
@@ -453,8 +446,7 @@ internal static class PackageBuilder
             {
                 if (!IsRepositoryScanPathExcluded(
                         Path.GetRelativePath(root, childDirectory),
-                        excludedDirectoryNames,
-                        excludedRelativeDirectories))
+                        excludedDirectoryNames))
                 {
                     pendingDirectories.Push(childDirectory);
                 }
@@ -466,28 +458,14 @@ internal static class PackageBuilder
 
     internal static bool IsRepositoryScanPathExcluded(
         string relativePath,
-        IReadOnlyCollection<string> excludedDirectoryNames,
-        IReadOnlyCollection<string> excludedRelativeDirectories)
+        IReadOnlyCollection<string> excludedDirectoryNames)
     {
-        var normalizedPath = relativePath.Replace('\\', '/').TrimStart('/');
         var excludedNames = excludedDirectoryNames.ToHashSet(StringComparer.OrdinalIgnoreCase);
-        if (normalizedPath.Split('/', StringSplitOptions.RemoveEmptyEntries)
-            .Any(segment => excludedNames.Contains(segment)))
-        {
-            return true;
-        }
-
-        return excludedRelativeDirectories.Any(excluded =>
-        {
-            var normalizedExcluded = excluded.Replace('\\', '/').Trim('/');
-            return normalizedExcluded.Length != 0 &&
-                (string.Equals(normalizedPath, normalizedExcluded, StringComparison.OrdinalIgnoreCase) ||
-                 normalizedPath.StartsWith(normalizedExcluded + "/", StringComparison.OrdinalIgnoreCase));
-        });
+        return relativePath
+            .Replace('\\', '/')
+            .Split('/', StringSplitOptions.RemoveEmptyEntries)
+            .Any(segment => excludedNames.Contains(segment));
     }
-
-    internal static IReadOnlySet<string> RepositoryUrlHosts(NetworkConfig config) =>
-        ProductUrlHosts(config, includeNonFetchingMarkupNamespaceHosts: true);
 
     internal static IReadOnlySet<string> ProductUrlHosts(
         NetworkConfig config,
@@ -525,7 +503,7 @@ internal static class PackageBuilder
                 TimeSpan.FromSeconds(2)))
             .ToArray();
 
-    internal static void AddRegexViolations(
+    private static void AddRegexViolations(
         ICollection<string> violations,
         string relativePath,
         string text,
@@ -1918,7 +1896,6 @@ internal sealed class NetworkConfig
 internal sealed class ScanConfig
 {
     public string[] ExcludedDirectories { get; init; } = [];
-    public string[] ExcludedRelativeDirectories { get; init; } = [];
     public string[] SecretRegexes { get; init; } = [];
     public string[] DeveloperPathRegexes { get; init; } = [];
     public string[] RawOverlayFieldNames { get; init; } = [];
