@@ -35,14 +35,6 @@
       "help.op.gg",
       "op.gg"
     ],
-    "buildAndResearchDocumentationHosts": [
-      "registry.npmjs.org",
-      "npmjs.com",
-      "hub.docker.com",
-      "mcr.microsoft.com",
-      "learn.chatgpt.com",
-      "developers.openai.com"
-    ],
     "nonFetchingMarkupNamespaceHosts": [
       "schemas.microsoft.com"
     ]
@@ -57,10 +49,7 @@
       "obj",
       "outputs"
     ],
-    "excludedRelativeDirectories": [
-      ".sandcastle/logs",
-      ".sandcastle/worktrees"
-    ],
+    "excludedRelativeDirectories": [],
     "secretRegexes": [
       "RGAPI-[A-Za-z0-9_-]{20,}",
       "(?i)\\b(?:ghp_[A-Za-z0-9]{20,}|github_pat_[A-Za-z0-9_]{20,})\\b",
@@ -74,9 +63,6 @@
       "(?i)[A-Z]:\\\\Users\\\\[^\\\\\"'\\r\\n]+",
       "/home/[^/\\s]+/",
       "/Users/[^/\\s]+/"
-    ],
-    "sandboxPathAllowanceRegexes": [
-      "^/home/agent/"
     ],
     "rawOverlayFieldNames": [
       "Kills",

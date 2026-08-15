@@ -13,24 +13,11 @@
 3. `SECURITY.md`
 4. 與任務直接相關的程式碼和測試
 
-執行或修改 Sandcastle、Issue worker、自主 agent 任務或 sandbox 驗證前，先完整閱讀
-`.sandcastle/README.md`。Sandcastle 任務必須來自選定的 GitHub Issue，使用
-`npm run sandcastle -- --issue N` 或 `Sandcastle` label 佇列；不得退回手動修改
-`.sandcastle/prompt.md` 的 blank runner。所有修改使用 `sandcastle/issue-N` 本機
-branch，並由無 GitHub credential 的 fresh implementation agent、project gates 與
-fresh independent reviewer 依序處理。Host delivery 只有在 repository owner 已提交
-`delivery.enabled=true` 且本次執行明確傳入 `--allow-delivery` 時，才能 non-force
-push 已驗證的 exact SHA、建立／更新唯一 draft PR 和 bounded harness status；預設
-設定必須保持 inert。Merge 另需 checked-in `merge.enabled=true`、本次
-`--allow-merge` 及 trusted actor 的 byte-exact `/sandcastle approve`，並在 merge 前
-重驗不變的 approval、base/head、checks、comments，再以 head SHA compare-and-swap。
-Issue close、deploy、release、publish、branch deletion、force-push、admin merge 與
-auto-merge 永遠不在 worker 權限內。
-
-啟用 delivery 的前提是 configured base branch 已在 GitHub 上受保護。Worker 只驗證本機
-HEAD 等於 GitHub base SHA，不驗證那個 commit 的作者，而 host poller 會先 fast-forward 該
-branch 再從它讀取 `delivery.enabled`；能 push 到 base 的人因此同時決定執行什麼程式碼和
-是否啟用。工作來源也必須是 `trustedActor` 親自開的 Issue，其他人開的會 loud failure。
+這個 repository 沒有自動化的 Issue worker、host poller 或 sandbox 交付流程。`main` 上
+曾經有一套 Sandcastle worker（`c52fc15`），已在 2026-08-15 完整移除：它的 ownership
+boundary 依賴 base branch 的 protection，而 worker 無法自行驗證，因此不再使用。不要
+重新引入會自動 push、開 PR、merge 或在主機上定時執行 repository 程式碼的機制；需要
+時請先和使用者確認。
 
 不要假設文件一定正確；以目前程式碼、實際執行結果和量測為準，發現落差時同步修正文件。
 

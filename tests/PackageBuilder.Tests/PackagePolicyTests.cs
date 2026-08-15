@@ -47,7 +47,7 @@ public sealed class PackagePolicyTests
     }
 
     [Fact]
-    public void RepositoryScanExcludesDependenciesAndSandcastleRuntimeOutputsOnly()
+    public void RepositoryScanExcludesBuildOutputAndInstalledDependenciesOnly()
     {
         var repositoryRoot = FindRepositoryRoot();
         using var document = ReadPackageConfig(repositoryRoot);
@@ -55,50 +55,36 @@ public sealed class PackagePolicyTests
         var excludedDirectoryNames = ReadStrings(scan, "excludedDirectories");
         var excludedRelativeDirectories = ReadStrings(scan, "excludedRelativeDirectories");
 
+        // node_modules is not produced by this repository any more, but a stale
+        // install left in a working checkout must not be walked or scanned.
         Assert.True(PackageBuilder.IsRepositoryScanPathExcluded(
-            "node_modules/@ai-hero/sandcastle/package.json",
+            "node_modules/some-package/package.json",
             excludedDirectoryNames,
             excludedRelativeDirectories));
         Assert.True(PackageBuilder.IsRepositoryScanPathExcluded(
-            ".sandcastle/logs/smoke-test.log",
+            "src/LolPerformanceOverlay/obj/project.assets.json",
             excludedDirectoryNames,
             excludedRelativeDirectories));
         Assert.True(PackageBuilder.IsRepositoryScanPathExcluded(
-            ".sandcastle/logs/issue-worker/state.json",
-            excludedDirectoryNames,
-            excludedRelativeDirectories));
-        Assert.True(PackageBuilder.IsRepositoryScanPathExcluded(
-            ".sandcastle/logs/issue-worker/worker.lock",
-            excludedDirectoryNames,
-            excludedRelativeDirectories));
-        Assert.True(PackageBuilder.IsRepositoryScanPathExcluded(
-            ".sandcastle/worktrees/smoke-test/README.md",
+            "artifacts/package/publish",
             excludedDirectoryNames,
             excludedRelativeDirectories));
         Assert.False(PackageBuilder.IsRepositoryScanPathExcluded(
-            ".sandcastle/Dockerfile",
-            excludedDirectoryNames,
-            excludedRelativeDirectories));
-        Assert.False(PackageBuilder.IsRepositoryScanPathExcluded(
-            ".sandcastle/config.ts",
-            excludedDirectoryNames,
-            excludedRelativeDirectories));
-        Assert.False(PackageBuilder.IsRepositoryScanPathExcluded(
-            ".sandcastle/issue-worker.mts",
-            excludedDirectoryNames,
-            excludedRelativeDirectories));
-        Assert.False(PackageBuilder.IsRepositoryScanPathExcluded(
-            ".sandcastle/issue-worker-prompt.md",
+            "eng/PackageBuilder/Program.cs",
             excludedDirectoryNames,
             excludedRelativeDirectories));
         Assert.False(PackageBuilder.IsRepositoryScanPathExcluded(
             "docs/logs/retention-policy.md",
             excludedDirectoryNames,
             excludedRelativeDirectories));
+        Assert.False(PackageBuilder.IsRepositoryScanPathExcluded(
+            "src/LolPerformanceOverlay.Core/Models.cs",
+            excludedDirectoryNames,
+            excludedRelativeDirectories));
     }
 
     [Fact]
-    public void RepositoryFileEnumerationDoesNotDescendIntoSandcastleRuntimeDirectories()
+    public void RepositoryFileEnumerationDoesNotDescendIntoExcludedDirectories()
     {
         var repositoryRoot = FindRepositoryRoot();
         using var document = ReadPackageConfig(repositoryRoot);
@@ -109,14 +95,11 @@ public sealed class PackagePolicyTests
 
         try
         {
-            WriteSyntheticFile(syntheticRoot, ".sandcastle/config.ts");
-            WriteSyntheticFile(syntheticRoot, ".sandcastle/logs/run.log");
-            WriteSyntheticFile(syntheticRoot, ".sandcastle/logs/issue-worker/state.json");
-            WriteSyntheticFile(syntheticRoot, ".sandcastle/logs/issue-worker/worker.lock");
-            WriteSyntheticFile(syntheticRoot, ".sandcastle/worktrees/run/README.md");
-            WriteSyntheticFile(syntheticRoot, ".sandcastle/issue-worker.mts");
-            WriteSyntheticFile(syntheticRoot, ".sandcastle/issue-worker-prompt.md");
             WriteSyntheticFile(syntheticRoot, "node_modules/dependency/package.json");
+            WriteSyntheticFile(syntheticRoot, "src/App/obj/project.assets.json");
+            WriteSyntheticFile(syntheticRoot, "artifacts/package/publish/App.exe");
+            WriteSyntheticFile(syntheticRoot, "outputs/SHA256SUMS.txt");
+            WriteSyntheticFile(syntheticRoot, "src/App/Program.cs");
             WriteSyntheticFile(syntheticRoot, "docs/logs/retention-policy.md");
 
             var relativeFiles = PackageBuilder.EnumerateRepositoryFiles(
@@ -128,10 +111,8 @@ public sealed class PackagePolicyTests
 
             Assert.Equal(
                 [
-                    ".sandcastle/config.ts",
-                    ".sandcastle/issue-worker-prompt.md",
-                    ".sandcastle/issue-worker.mts",
-                    "docs/logs/retention-policy.md"
+                    "docs/logs/retention-policy.md",
+                    "src/App/Program.cs"
                 ],
                 relativeFiles);
         }
@@ -145,98 +126,22 @@ public sealed class PackagePolicyTests
     }
 
     [Fact]
-    public void SandcastleSupplyChainHostsAreRepositoryOnlyAndNeverShippedProductHosts()
-    {
-        var repositoryRoot = FindRepositoryRoot();
-        using var document = ReadPackageConfig(repositoryRoot);
-        var config = ReadNetworkConfig(document.RootElement.GetProperty("network"));
-        string[] expectedBuildAndResearchHosts =
-        [
-            "registry.npmjs.org",
-            "npmjs.com",
-            "hub.docker.com",
-            "mcr.microsoft.com",
-            "learn.chatgpt.com",
-            "developers.openai.com"
-        ];
-
-        PackageBuilder.ValidateNetworkHostClassifications(config);
-        var repositoryHosts = PackageBuilder.RepositoryUrlHosts(config);
-        var productHosts = PackageBuilder.ProductUrlHosts(
-            config,
-            includeNonFetchingMarkupNamespaceHosts: true);
-
-        Assert.Equal(expectedBuildAndResearchHosts, config.BuildAndResearchDocumentationHosts);
-        foreach (var host in expectedBuildAndResearchHosts)
-        {
-            Assert.Contains(host, repositoryHosts);
-            Assert.DoesNotContain(host, productHosts);
-        }
-    }
-
-    [Fact]
-    public void CanonicalSandcastleContainerHomeIsExcusedOnlyWhereAnAllowanceIsPassed()
+    public void EveryPosixHomeDirectoryIsARejectedDeveloperPath()
     {
         var patterns = ReadDeveloperPathPatterns();
-        var allowances = ReadSandboxPathAllowances();
-        const string text = "const mount = \"/home/agent/worktree/README.md\";";
-
-        // The product scans over shipped assemblies, the friend guide, and the ZIP
-        // pass no allowance, so the container home still has to be a violation there.
-        var productViolations = new List<string>();
-        PackageBuilder.AddRegexViolations(
-            productViolations,
-            "runtime.mts",
-            text,
-            patterns,
-            "developer machine path",
-            []);
-
-        var repositoryViolations = new List<string>();
-        PackageBuilder.AddRegexViolations(
-            repositoryViolations,
-            "runtime.mts",
-            text,
-            patterns,
-            "developer machine path",
-            allowances);
-
-        Assert.Single(productViolations);
-        Assert.Empty(repositoryViolations);
-    }
-
-    [Fact]
-    public void SandboxAllowanceNeverExcusesARealDeveloperHomeOnTheSameLine()
-    {
-        var patterns = ReadDeveloperPathPatterns();
-        var allowances = ReadSandboxPathAllowances();
-        var text = string.Concat("/home/agent/worktree and /home/", "developer-name", "/project/");
+        var containerHome = string.Concat("/home/", "agent", "/worktree/README.md");
         var violations = new List<string>();
 
         PackageBuilder.AddRegexViolations(
             violations,
-            "runtime.mts",
-            text,
+            "Program.cs",
+            containerHome,
             patterns,
-            "developer machine path",
-            allowances);
+            "developer machine path");
 
+        // The sandbox exemption existed only for the removed Issue worker. No path
+        // under /home is allowed to reach a shipped assembly, guide, or ZIP again.
         Assert.Single(violations);
-    }
-
-    [Fact]
-    public void UnanchoredSandboxPathAllowanceIsRejected()
-    {
-        Assert.Throws<InvalidDataException>(() =>
-            PackageBuilder.ValidateSandboxPathAllowances(new ScanConfig
-            {
-                SandboxPathAllowanceRegexes = ["/home/agent/"]
-            }));
-
-        PackageBuilder.ValidateSandboxPathAllowances(new ScanConfig
-        {
-            SandboxPathAllowanceRegexes = ["^/home/agent/"]
-        });
     }
 
     [Fact]
@@ -602,16 +507,6 @@ public sealed class PackagePolicyTests
         return PackageBuilder.CompileRegexes(patterns);
     }
 
-    private static Regex[] ReadSandboxPathAllowances()
-    {
-        var repositoryRoot = FindRepositoryRoot();
-        using var document = ReadPackageConfig(repositoryRoot);
-        var patterns = ReadStrings(
-            document.RootElement.GetProperty("scan"),
-            "sandboxPathAllowanceRegexes");
-        return PackageBuilder.CompileRegexes(patterns);
-    }
-
     private static Regex[] ReadSecretPatterns()
     {
         var repositoryRoot = FindRepositoryRoot();
@@ -625,7 +520,6 @@ public sealed class PackagePolicyTests
         RuntimeHosts = ReadStrings(network, "runtimeHosts"),
         UserInitiatedBrowserHosts = ReadStrings(network, "userInitiatedBrowserHosts"),
         DocumentationHosts = ReadStrings(network, "documentationHosts"),
-        BuildAndResearchDocumentationHosts = ReadStrings(network, "buildAndResearchDocumentationHosts"),
         NonFetchingMarkupNamespaceHosts = ReadStrings(network, "nonFetchingMarkupNamespaceHosts")
     };
 

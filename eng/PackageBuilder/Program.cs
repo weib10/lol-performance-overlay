@@ -162,8 +162,6 @@ internal static class PackageBuilder
     private static void ValidateConfiguration(BuildContext context)
     {
         var config = context.Config;
-        ValidateNetworkHostClassifications(config.Network);
-        ValidateSandboxPathAllowances(config.Scan);
         if (!string.Equals(config.Paths.WorkDirectory, "artifacts/package", StringComparison.Ordinal) ||
             !string.Equals(config.Paths.OutputDirectory, "outputs", StringComparison.Ordinal))
         {
@@ -386,7 +384,6 @@ internal static class PackageBuilder
         var scanFiles = EnumerateRepositoryFiles(context).ToArray();
         var secretRegexes = CompileRegexes(config.Scan.SecretRegexes);
         var pathRegexes = CompileRegexes(config.Scan.DeveloperPathRegexes);
-        var pathAllowances = CompileRegexes(config.Scan.SandboxPathAllowanceRegexes);
         var knownHosts = RepositoryUrlHosts(config.Network);
         var violations = new HashSet<string>(StringComparer.Ordinal);
 
@@ -399,13 +396,7 @@ internal static class PackageBuilder
                 if (!isRulesFile)
                 {
                     AddRegexViolations(violations, relative, text, secretRegexes, "secret-like value");
-                    AddRegexViolations(
-                        violations,
-                        relative,
-                        text,
-                        pathRegexes,
-                        "developer machine path",
-                        pathAllowances);
+                    AddRegexViolations(violations, relative, text, pathRegexes, "developer machine path");
                     ValidateSyntheticRiotIds(
                         violations,
                         relative,
@@ -496,12 +487,7 @@ internal static class PackageBuilder
     }
 
     internal static IReadOnlySet<string> RepositoryUrlHosts(NetworkConfig config) =>
-        config.RuntimeHosts
-            .Concat(config.UserInitiatedBrowserHosts)
-            .Concat(config.DocumentationHosts)
-            .Concat(config.BuildAndResearchDocumentationHosts)
-            .Concat(config.NonFetchingMarkupNamespaceHosts)
-            .ToHashSet(StringComparer.OrdinalIgnoreCase);
+        ProductUrlHosts(config, includeNonFetchingMarkupNamespaceHosts: true);
 
     internal static IReadOnlySet<string> ProductUrlHosts(
         NetworkConfig config,
@@ -516,38 +502,6 @@ internal static class PackageBuilder
         }
 
         return hosts.ToHashSet(StringComparer.OrdinalIgnoreCase);
-    }
-
-    // An unanchored allowance would also excuse the container directory nested
-    // inside a real developer home, so every allowance must pin the start of the
-    // matched developer path.
-    internal static void ValidateSandboxPathAllowances(ScanConfig config)
-    {
-        var unanchored = config.SandboxPathAllowanceRegexes
-            .Where(pattern => !pattern.StartsWith('^'))
-            .ToArray();
-        if (unanchored.Length != 0)
-        {
-            throw new InvalidDataException(
-                "Sandbox path allowances must be anchored at the start of the matched path: " +
-                string.Join(", ", unanchored));
-        }
-    }
-
-    internal static void ValidateNetworkHostClassifications(NetworkConfig config)
-    {
-        var productHosts = ProductUrlHosts(config, includeNonFetchingMarkupNamespaceHosts: true);
-        var overlappingHosts = config.BuildAndResearchDocumentationHosts
-            .Where(productHosts.Contains)
-            .Distinct(StringComparer.OrdinalIgnoreCase)
-            .OrderBy(host => host, StringComparer.OrdinalIgnoreCase)
-            .ToArray();
-        if (overlappingHosts.Length != 0)
-        {
-            throw new InvalidDataException(
-                "Build/research-only documentation hosts must not be classified as shipped product hosts: " +
-                string.Join(", ", overlappingHosts));
-        }
     }
 
     internal static IEnumerable<string> DecodeScanViews(byte[] bytes)
@@ -571,37 +525,19 @@ internal static class PackageBuilder
                 TimeSpan.FromSeconds(2)))
             .ToArray();
 
-    private static void AddRegexViolations(
-        ICollection<string> violations,
-        string relativePath,
-        string text,
-        IEnumerable<Regex> patterns,
-        string description) =>
-        AddRegexViolations(violations, relativePath, text, patterns, description, []);
-
-    // The sandbox container home legitimately appears in Sandcastle source, but it
-    // must never reach a shipped assembly, guide, or ZIP. Allowances are therefore
-    // passed only by the repository scan; the product scans keep the strict
-    // developer-path patterns, so relaxing one cannot silently relax the others.
     internal static void AddRegexViolations(
         ICollection<string> violations,
         string relativePath,
         string text,
         IEnumerable<Regex> patterns,
-        string description,
-        IReadOnlyCollection<Regex> allowances)
+        string description)
     {
         foreach (var regex in patterns)
         {
-            foreach (Match match in regex.Matches(text))
+            var match = regex.Match(text);
+            if (match.Success)
             {
-                if (allowances.Any(allowance => allowance.IsMatch(match.Value)))
-                {
-                    continue;
-                }
-
                 violations.Add($"{relativePath}: {description} at line {LineNumber(text, match.Index)}");
-                break;
             }
         }
     }
@@ -1976,7 +1912,6 @@ internal sealed class NetworkConfig
     public string[] RuntimeHosts { get; init; } = [];
     public string[] UserInitiatedBrowserHosts { get; init; } = [];
     public string[] DocumentationHosts { get; init; } = [];
-    public string[] BuildAndResearchDocumentationHosts { get; init; } = [];
     public string[] NonFetchingMarkupNamespaceHosts { get; init; } = [];
 }
 
@@ -1986,7 +1921,6 @@ internal sealed class ScanConfig
     public string[] ExcludedRelativeDirectories { get; init; } = [];
     public string[] SecretRegexes { get; init; } = [];
     public string[] DeveloperPathRegexes { get; init; } = [];
-    public string[] SandboxPathAllowanceRegexes { get; init; } = [];
     public string[] RawOverlayFieldNames { get; init; } = [];
     public string[] SyntheticGameNamePrefixes { get; init; } = [];
     public string[] SyntheticTagLines { get; init; } = [];

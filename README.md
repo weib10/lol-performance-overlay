@@ -65,25 +65,6 @@ Windows PowerShell：
 
 GitHub Actions 的 [`windows-package.yml`](.github/workflows/windows-package.yml) 在 `windows-latest` 使用同一個 `scripts/package.ps1`，成功後上傳候選 ZIP、manifest 與 hashes；workflow 不會自動合併或建立正式 Release。
 
-## Sandcastle 開發沙箱
-
-Repository 內提供固定版本的 Sandcastle GitHub Issue worker。維護者選擇 Issue
-（`npm run sandcastle -- --issue N`）或將 Issue 加入 `Sandcastle` label 佇列後，
-worker 會讓無 GitHub credential 的 fresh implementation／review agents 在同一個
-`sandcastle/issue-N` branch 執行，通過 canonical package gate 與 final-SHA
-verification 後，才由 trusted host 以 non-force push 交付 exact SHA，並建立或更新
-唯一一個 draft PR。後續 trusted owner comment 可在同 branch 啟動 revision round，
-不必重新加 label。
-
-目前 checked-in 設定的 delivery 與 merge 都是 `false`，所以預設執行不會留言、改
-label、push、建立 PR 或 merge。Repository owner 必須先明確提交啟用設定，執行者
-還要逐次傳入對應 runtime flag；merge 另要求 trusted owner 的 byte-exact
-`/sandcastle approve`，且仍不會關閉 Issue、deploy、release、publish、刪除 branch、
-force-push、admin merge 或 auto-merge。容器永遠不取得 GitHub credential。
-
-第一次使用、owner 啟用、revision／approval、重啟復原與 credential 邊界見
-[`.sandcastle/README.md`](.sandcastle/README.md)。
-
 ## 資料流
 
 ```text
