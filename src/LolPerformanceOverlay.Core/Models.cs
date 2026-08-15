@@ -49,7 +49,8 @@ public sealed record ChampSelectMember(
     int ChampionId,
     string ChampionName,
     string? ChampionIconPath,
-    bool IsAnonymous);
+    bool IsAnonymous,
+    int? PickOrder = null);
 
 public sealed record RawItemState(int ItemId, int Count, int GoldValue);
 
@@ -89,7 +90,15 @@ public sealed record OverlayPlayer(
     bool IsAnonymous,
     double? PerformanceScore,
     string? PerformanceLabel,
-    PerformanceConfidence? Confidence);
+    PerformanceConfidence? Confidence,
+    // Champ select only: this cell's place in the pick sequence, so a position swap
+    // does not lose who picked before whom. Null when the client did not report it.
+    int? PickOrder = null,
+    // Live game only: the summed shop value of the items this player is carrying.
+    // Derived from items the in-game scoreboard already shows and static Data Dragon
+    // prices; it is not the player's unspent gold, which the client does not expose
+    // for anyone but the local player.
+    int? ItemGold = null);
 
 public sealed record OverlayTeam(
     int Team,

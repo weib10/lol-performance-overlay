@@ -292,6 +292,53 @@ public sealed class PerformanceScorerTests
             level,
             [new RawItemState(1000 + index, 1, gold)]);
 
+    [Fact]
+    public void LiveSnapshotPublishesItemValueQuantisedToItsDisplayedPrecision()
+    {
+        var scorer = new PerformanceScorer();
+        var players = Enumerable.Range(0, 10)
+            .Select(index => Player(
+                index,
+                index < 5 ? 100 : 200,
+                ChampionArchetype.Fighter,
+                gold: 6_249 + index))
+            .ToArray();
+
+        var snapshot = scorer.Score(Frame(600d, players));
+        var carried = snapshot.Teams.SelectMany(team => team.Players).ToArray();
+
+        // 6,249..6,258 all render as "6.2k", so they must land on one view-model value
+        // and never make the overlay redraw for a change the player cannot see.
+        Assert.All(carried, player => Assert.Equal(6_200, player.ItemGold));
+        Assert.All(carried, player => Assert.Null(player.PickOrder));
+    }
+
+    [Fact]
+    public void ChampSelectSnapshotCarriesPickOrderWithoutResortingTheRoster()
+    {
+        var scorer = new PerformanceScorer();
+        var members = new[]
+        {
+            new ChampSelectMember("cell-0-100", "A#TW2", 100, 1, "Annie", null, false, 3),
+            new ChampSelectMember("cell-1-100", "B#TW2", 100, 2, "Olaf", null, false, 1)
+        };
+        var frame = new LeagueSessionFrame(
+            LeaguePhase.ChampSelect,
+            DateTimeOffset.UnixEpoch,
+            0d,
+            "CLASSIC",
+            420,
+            "A#TW2",
+            members,
+            Array.Empty<RawPlayerState>());
+
+        var players = scorer.Score(frame).Teams.Single().Players;
+
+        Assert.Equal(["cell-0-100", "cell-1-100"], players.Select(player => player.StableKey));
+        Assert.Equal([3, 1], players.Select(player => player.PickOrder));
+        Assert.All(players, player => Assert.Null(player.ItemGold));
+    }
+
     private static double OriginalPercentile(IReadOnlyList<double> values, double value)
     {
         const double epsilon = 0.000001d;

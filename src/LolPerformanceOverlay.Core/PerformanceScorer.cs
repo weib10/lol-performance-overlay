@@ -84,16 +84,20 @@ public sealed class PerformanceScorer : IPerformanceScorer
                 group.Key,
                 TeamName(group.Key),
                 null,
-                group.Select(member => new OverlayPlayer(
-                    member.StableKey,
-                    member.IsAnonymous ? "匿名玩家" : member.RiotId ?? "已識別玩家",
-                    member.Team,
-                    string.IsNullOrWhiteSpace(member.ChampionName) ? "尚未選擇" : member.ChampionName,
-                    member.ChampionIconPath,
-                    member.IsAnonymous,
-                    null,
-                    null,
-                    null)).ToArray()))
+                // Keep the roster in cell order so positions still read top-to-bottom;
+                // the pick number is shown per player instead of resorting the list.
+                group
+                    .Select(member => new OverlayPlayer(
+                        member.StableKey,
+                        member.IsAnonymous ? "匿名玩家" : member.RiotId ?? "已識別玩家",
+                        member.Team,
+                        string.IsNullOrWhiteSpace(member.ChampionName) ? "尚未選擇" : member.ChampionName,
+                        member.ChampionIconPath,
+                        member.IsAnonymous,
+                        null,
+                        null,
+                        null,
+                        member.PickOrder)).ToArray()))
             .ToArray();
 
         var visible = frame.ChampSelectMembers.Count(member => !member.IsAnonymous);
@@ -184,7 +188,9 @@ public sealed class PerformanceScorer : IPerformanceScorer
                 false,
                 Math.Round(smoothed, 1),
                 ScoreLabel(smoothed),
-                confidence));
+                confidence,
+                null,
+                DisplayItemGold(players[index])));
         }
 
         PruneScoresToCurrentRoster(players);
@@ -228,6 +234,14 @@ public sealed class PerformanceScorer : IPerformanceScorer
 
     private static double ItemGold(RawPlayerState player) =>
         player.Items.Sum(item => Math.Max(item.Count, 1) * Math.Max(item.GoldValue, 0));
+
+    /// <summary>
+    /// The overlay shows item value to one decimal of a thousand ("12.4k"), so the view
+    /// model carries it at that precision. Every purchase would otherwise register as a
+    /// snapshot change and force a UI update the player cannot see.
+    /// </summary>
+    internal static int DisplayItemGold(RawPlayerState player) =>
+        (int)(Math.Round(ItemGold(player) / 100d) * 100d);
 
     private static ArchetypeWeights ResolveWeights(RawPlayerState player)
     {

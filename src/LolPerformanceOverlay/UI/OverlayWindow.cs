@@ -293,27 +293,43 @@ public sealed class OverlayWindow : Window
     private UIElement BuildCompact()
     {
         Width = 460;
-        Height = _visualWasChampSelect ? 100 : 112;
+        Height = _visualWasChampSelect ? 120 : 112;
         var root = Card();
         var stack = new StackPanel();
         stack.Children.Add(BuildHeader(allowSettings: false));
 
         if (_visualWasChampSelect)
         {
-            var icons = new UniformGrid
+            // One flat row of ten made the two sides indistinguishable. Split them into
+            // labelled, colour-coded halves so blue and red read apart at a glance --
+            // the label carries the side, so colour is not the only signal.
+            var sides = new Grid { Margin = new Thickness(14, 0, 14, 10) };
+            sides.ColumnDefinitions.Add(new ColumnDefinition());
+            sides.ColumnDefinitions.Add(new ColumnDefinition { Width = new GridLength(14) });
+            sides.ColumnDefinitions.Add(new ColumnDefinition());
+            for (var side = 0; side < 2; side++)
             {
-                Columns = 10,
-                Margin = new Thickness(14, 2, 14, 12)
-            };
-            for (var index = 0; index < 10; index++)
-            {
-                var avatar = CreateAvatar(32);
-                avatar.Root.Margin = new Thickness(2, 0, 2, 0);
-                _compactAvatars.Add(avatar);
-                icons.Children.Add(avatar.Root);
+                var column = new StackPanel();
+                column.Children.Add(Text(
+                    side == 0 ? "藍方" : "紅方",
+                    11,
+                    TeamColor(side == 0 ? 100 : 200),
+                    FontWeights.SemiBold));
+                var icons = new UniformGrid { Columns = 5, Margin = new Thickness(0, 3, 0, 0) };
+                for (var index = 0; index < 5; index++)
+                {
+                    var avatar = CreateAvatar(32);
+                    avatar.Root.Margin = new Thickness(2, 0, 2, 0);
+                    _compactAvatars.Add(avatar);
+                    icons.Children.Add(avatar.Root);
+                }
+
+                column.Children.Add(icons);
+                Grid.SetColumn(column, side == 0 ? 0 : 2);
+                sides.Children.Add(column);
             }
 
-            stack.Children.Add(icons);
+            stack.Children.Add(sides);
         }
         else
         {
@@ -334,8 +350,8 @@ public sealed class OverlayWindow : Window
 
     private UIElement BuildExpanded()
     {
-        Width = 720;
-        Height = 610;
+        Width = 648;
+        Height = 552;
         var root = Card();
         var layout = new DockPanel();
         var header = BuildHeader(allowSettings: true);
@@ -382,8 +398,8 @@ public sealed class OverlayWindow : Window
         grid.ColumnDefinitions.Add(new ColumnDefinition { Width = GridLength.Auto });
 
         var text = new StackPanel();
-        _headerText = Text(string.Empty, 13, "#F5F7FB", FontWeights.SemiBold);
-        _summaryText = Text(string.Empty, 11, "#9DABC0");
+        _headerText = Text(string.Empty, 14.5, "#F5F7FB", FontWeights.SemiBold);
+        _summaryText = Text(string.Empty, 12, "#A6B3C7");
         text.Children.Add(_headerText);
         text.Children.Add(_summaryText);
         grid.Children.Add(text);
@@ -463,8 +479,8 @@ public sealed class OverlayWindow : Window
         var heading = new Grid { Margin = new Thickness(2, 0, 2, 8) };
         heading.ColumnDefinitions.Add(new ColumnDefinition());
         heading.ColumnDefinitions.Add(new ColumnDefinition { Width = GridLength.Auto });
-        var name = Text(string.Empty, 13, "#74B7FF", FontWeights.SemiBold);
-        var score = Text(string.Empty, 13, "#F5F7FB", FontWeights.SemiBold);
+        var name = Text(string.Empty, 14.5, "#74B7FF", FontWeights.SemiBold);
+        var score = Text(string.Empty, 14.5, "#F5F7FB", FontWeights.SemiBold);
         Grid.SetColumn(score, 1);
         heading.Children.Add(name);
         heading.Children.Add(score);
@@ -486,21 +502,21 @@ public sealed class OverlayWindow : Window
     {
         var root = new Border
         {
-            Height = 54,
-            Margin = new Thickness(0, 0, 0, 5),
-            Padding = new Thickness(6),
+            Height = 56,
+            Margin = new Thickness(0, 0, 0, 4),
+            Padding = new Thickness(6, 4, 6, 4),
             Background = new SolidColorBrush(Color.FromArgb(92, 22, 29, 42)),
             CornerRadius = new CornerRadius(8)
         };
         var grid = new Grid();
         grid.ColumnDefinitions.Add(new ColumnDefinition { Width = new GridLength(40) });
         grid.ColumnDefinitions.Add(new ColumnDefinition());
-        grid.ColumnDefinitions.Add(new ColumnDefinition { Width = new GridLength(92) });
+        grid.ColumnDefinitions.Add(new ColumnDefinition { Width = new GridLength(86) });
         var avatar = CreateAvatar(34);
         grid.Children.Add(avatar.Root);
         var identity = new StackPanel { VerticalAlignment = VerticalAlignment.Center };
-        var champion = Text(string.Empty, 11.5, "#F4F7FC", FontWeights.SemiBold);
-        var playerName = Text(string.Empty, 9.5, "#9EABC0");
+        var champion = Text(string.Empty, 13.5, "#F4F7FC", FontWeights.SemiBold);
+        var playerName = Text(string.Empty, 11, "#A6B3C7");
         identity.Children.Add(champion);
         identity.Children.Add(playerName);
         Grid.SetColumn(identity, 1);
@@ -510,14 +526,17 @@ public sealed class OverlayWindow : Window
             VerticalAlignment = VerticalAlignment.Center,
             HorizontalAlignment = HorizontalAlignment.Right
         };
-        var score = Text(string.Empty, 13, "#E7EDF7", FontWeights.Bold);
-        var detail = Text(string.Empty, 9, "#8795AA");
+        var score = Text(string.Empty, 15, "#E7EDF7", FontWeights.Bold, HorizontalAlignment.Right);
+        var detail = Text(string.Empty, 10.5, "#8F9DB2", alignment: HorizontalAlignment.Right);
+        // Champ select shows this cell's pick number; a live game shows carried item value.
+        var meta = Text(string.Empty, 10.5, "#7F8FA6", FontWeights.SemiBold, HorizontalAlignment.Right);
         performance.Children.Add(score);
         performance.Children.Add(detail);
+        performance.Children.Add(meta);
         Grid.SetColumn(performance, 2);
         grid.Children.Add(performance);
         root.Child = grid;
-        return new PlayerRowView(root, avatar, champion, playerName, score, detail);
+        return new PlayerRowView(root, avatar, champion, playerName, score, detail, meta);
     }
 
     private static StackPanel CompactTeam(
@@ -526,8 +545,8 @@ public sealed class OverlayWindow : Window
         HorizontalAlignment alignment)
     {
         var stack = new StackPanel { HorizontalAlignment = alignment };
-        heading = Text(string.Empty, 13, "#DCE8F8", FontWeights.SemiBold);
-        detail = Text(string.Empty, 10.5, "#8F9DB1");
+        heading = Text(string.Empty, 14.5, "#DCE8F8", FontWeights.SemiBold);
+        detail = Text(string.Empty, 12, "#96A4B8");
         stack.Children.Add(heading);
         stack.Children.Add(detail);
         return stack;
@@ -620,10 +639,22 @@ public sealed class OverlayWindow : Window
     {
         if (_visualWasChampSelect)
         {
-            var players = _snapshot.Teams.SelectMany(team => team.Players).Take(10).ToArray();
-            for (var index = 0; index < _compactAvatars.Count; index++)
+            // Slots 0-4 belong to the blue column and 5-9 to the red one, so fill each
+            // side from its own team instead of flattening both into one sequence.
+            for (var side = 0; side < 2; side++)
             {
-                UpdateAvatar(_compactAvatars[index], index < players.Length ? players[index] : null);
+                var team = _snapshot.Teams.FirstOrDefault(candidate =>
+                    candidate.Team == (side == 0 ? 100 : 200));
+                for (var seat = 0; seat < 5; seat++)
+                {
+                    var slot = side * 5 + seat;
+                    if (slot >= _compactAvatars.Count)
+                    {
+                        break;
+                    }
+
+                    UpdateAvatar(_compactAvatars[slot], team?.Players.ElementAtOrDefault(seat));
+                }
             }
 
             return;
@@ -776,6 +807,32 @@ public sealed class OverlayWindow : Window
         view.Detail.Text = player.PerformanceLabel is null
             ? player.IsAnonymous ? "匿名" : "尚未開始"
             : $"{player.PerformanceLabel} · {ConfidenceText(player.Confidence)}";
+        UpdatePlayerMeta(view, player);
+    }
+
+    /// <summary>
+    /// Pick number during champ select, carried item value during a game. Labelled
+    /// 裝備值 rather than 經濟 because the client only reports unspent gold for the
+    /// local player, so this is the shop value of items on the board and nothing more.
+    /// </summary>
+    private static void UpdatePlayerMeta(PlayerRowView view, OverlayPlayer player)
+    {
+        string text;
+        if (player.PickOrder is { } pickOrder)
+        {
+            text = $"第 {pickOrder} 選";
+        }
+        else if (player.ItemGold is { } itemGold && itemGold > 0)
+        {
+            text = $"裝備 {itemGold / 1000d:0.0}k";
+        }
+        else
+        {
+            text = string.Empty;
+        }
+
+        view.Meta.Text = text;
+        view.Meta.Visibility = text.Length == 0 ? Visibility.Collapsed : Visibility.Visible;
     }
 
     private void UpdatePlayerRow(
@@ -813,6 +870,11 @@ public sealed class OverlayWindow : Window
             view.Detail.Text = player.PerformanceLabel is null
                 ? player.IsAnonymous ? "匿名" : "尚未開始"
                 : $"{player.PerformanceLabel} · {ConfidenceText(player.Confidence)}";
+        }
+
+        if ((fields & (OverlayPlayerFields.PickOrder | OverlayPlayerFields.ItemGold)) != 0)
+        {
+            UpdatePlayerMeta(view, player);
         }
     }
 
@@ -923,14 +985,19 @@ public sealed class OverlayWindow : Window
                 $"激進 {StyleText(profile.PlayStyle.Aggression.Band)}／生存 {StyleText(profile.PlayStyle.Survival.Band)}／" +
                 $"團隊 {StyleText(profile.PlayStyle.TeamParticipation.Band)}／發育 {StyleText(profile.PlayStyle.Farming.Band)}／" +
                 $"英雄池 {StyleText(profile.PlayStyle.ChampionPool.Band)}";
+            _historyMeta.Visibility = Visibility.Visible;
+            _historyDetails.Visibility = Visibility.Visible;
             return;
         }
 
+        // With no profile, the source/sample and disclaimer lines carry nothing a reader
+        // acts on, and they cost two lines of Expanded height on every frame. The state
+        // itself still says unavailable, which is what the release criteria require.
         var availability = entry?.Availability ?? _historicalProfiles?.Availability ??
             HistoricalProfileAvailability.PolicyDisabled;
-        _historyStatus.Text = AvailabilityText(availability);
-        _historyMeta.Text = "來源：未啟用 · 樣本：0 · 信心：資料不足";
-        _historyDetails.Text = "歷史資料失效不影響上方本場即時表現；不會使用假資料冒充真人資料。";
+        _historyStatus.Text = $"{AvailabilityText(availability)}；不影響上方本場表現，也不會用假資料冒充真人。";
+        _historyMeta.Visibility = Visibility.Collapsed;
+        _historyDetails.Visibility = Visibility.Collapsed;
     }
 
     private HistoricalProfileEntry? FindActiveHistoryEntry()
@@ -1414,7 +1481,8 @@ public sealed class OverlayWindow : Window
         TextBlock Champion,
         TextBlock Player,
         TextBlock Score,
-        TextBlock Detail);
+        TextBlock Detail,
+        TextBlock Meta);
 
     private sealed record TeamView(
         Border Root,

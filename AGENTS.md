@@ -51,7 +51,12 @@ release gate 的乾淨 Git tree 檢查會失敗，repository scan 也會去走�
 - 對更新流程建立一個清楚的 seam，使資料取得、評分、節流和 UI 更新能分開量測；網路、JSON 解析與圖片解碼不得阻塞 UI 執行緒。
 - 優先保留 `ILeagueSessionSource`、`IStaticGameDataProvider`、`IPerformanceScorer`、`OverlaySnapshot` 的安全資料邊界。若要改 interface，先說明能增加什麼 leverage、locality 或 testability。
 - Fixtures、測試、截圖、log 和 Issue 不得包含真實 Riot ID、LCU token 或開發者本機路徑。
-- 不把原始 KDA、等級、CS、死亡時間或物品價值加入 `OverlaySnapshot` 或 UI view model。
+- 不把原始 KDA、等級、CS 或死亡時間加入 `OverlaySnapshot` 或 UI view model。
+- 2026-08-16 起，裝備價值總和是例外，可以進入 view model。原因：使用者要用它判斷 BP 與戰力差，
+  而官方 Live Client Data API 本來就公開所有玩家的 `items`，單價是賽前就有的 Data Dragon 靜態資料，
+  加總只是對遊戲客戶端內已有資訊做算術，落在 Riot 政策核可的 overlay 範圍。仍然禁止把原始 item 陣列
+  放進 view model，只能放聚合後的總值；也必須標示為「裝備值」而非「經濟」，因為客戶端只提供本人的
+  未花費金錢，把裝備值稱作總經濟會高估。
 - 可以研究並使用官方 Riot API、OP.GG 公開頁面或其他歷史資料，但必須遵守下方的「歷史資料來源規則」；匿名身分還原、遊戲注入和自動輸入仍然禁止。
 - 不因功能困難而靜默縮小範圍；若必須調整產品承諾，要在文件中清楚記錄原因。
 

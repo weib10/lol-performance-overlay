@@ -20,7 +20,11 @@ public sealed class SettingsWindow : Window
         Title = "LoL 即時表現 Overlay 設定";
         Width = 420;
         Height = 380;
+        // The Overlay is Topmost, so an unowned dialog opens underneath it and its
+        // controls cannot be reached. Owning the dialog puts it above its owner, and
+        // Topmost keeps it above the game as well.
         WindowStartupLocation = WindowStartupLocation.CenterScreen;
+        Topmost = true;
         ResizeMode = ResizeMode.NoResize;
         Background = new SolidColorBrush(Color.FromRgb(20, 25, 36));
         Foreground = Brushes.White;

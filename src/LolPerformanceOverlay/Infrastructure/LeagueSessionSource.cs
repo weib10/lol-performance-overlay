@@ -266,7 +266,8 @@ public sealed class LeagueSessionSource : ILeagueSessionSource
                 member.ChampionId,
                 member.ChampionId > 0 ? champion.Name : string.Empty,
                 await iconRequests[index],
-                member.IsAnonymous);
+                member.IsAnonymous,
+                member.PickOrder);
         }
 
         var now = DateTimeOffset.UtcNow;

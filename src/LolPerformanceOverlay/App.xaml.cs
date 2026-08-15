@@ -336,7 +336,7 @@ public partial class App : System.Windows.Application
             return;
         }
 
-        var dialog = new SettingsWindow(_settings);
+        var dialog = new SettingsWindow(_settings) { Owner = _overlay };
         if (dialog.ShowDialog() != true)
         {
             return;

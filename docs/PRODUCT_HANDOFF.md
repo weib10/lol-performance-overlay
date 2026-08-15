@@ -252,7 +252,8 @@ Session loop 從 WPF startup 啟動，async iterator、HTTP await、JSON parsing
 
 ### 安全與隱私
 
-- Overlay view model、朋友文件、fixture、log 和 package 不含原始 KDA、等級、CS、死亡時間、物品價值、LCU token 或真實測試 Riot ID。
+- Overlay view model、朋友文件、fixture、log 和 package 不含原始 KDA、等級、CS、死亡時間、原始 item 陣列、LCU token 或真實測試 Riot ID。
+- 裝備價值**總和**自 2026-08-16 起是允許的例外，理由與界線見 `AGENTS.md`：可顯示聚合總值，不可顯示原始 item 陣列，且必須標示為「裝備值」而非「經濟」。
 - 網路目的地僅包含本機 loopback、文件允許的 Riot 網域與經政策審查後列入 allowlist 的歷史資料來源。
 - 無注入、記憶體讀取、自動輸入、匿名身分還原或自製 MMR／ELO。
 - Riot API key、OP.GG session、cookie 或其他秘密不進入 EXE、ZIP、log、fixture 或公開設定。

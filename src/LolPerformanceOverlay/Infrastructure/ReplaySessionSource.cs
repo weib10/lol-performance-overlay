@@ -84,7 +84,11 @@ public sealed class ReplaySessionSource : IReplaySource
                 descriptor.Id,
                 descriptor.Name,
                 icon,
-                anonymous));
+                anonymous,
+                // A real draft alternates sides and does not follow roster order, so give
+                // Replay the standard 1-2-2-2-2-1 sequence. Otherwise the pick-order badge
+                // cannot be checked without a live champ select.
+                DraftPickOrder.ElementAtOrDefault(index) is > 0 and var order ? order : null));
         }
 
         return new LeagueSessionFrame(
@@ -148,6 +152,11 @@ public sealed class ReplaySessionSource : IReplaySource
             "離線 Replay",
             "tw2");
     }
+
+    /// Standard draft turn order by roster slot: blue 1, red 2-3, blue 4-5, red 6-7,
+    /// blue 8-9, red 10. Indexed by the same order as <see cref="Roster"/>.
+    private static readonly IReadOnlyList<int> DraftPickOrder =
+        [1, 4, 5, 8, 9, 2, 3, 6, 7, 10];
 
     private static readonly IReadOnlyList<ReplayPlayerSpec> Roster =
     [

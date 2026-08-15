@@ -42,6 +42,53 @@ public sealed class LeagueSessionParserTests
     }
 
     [Fact]
+    public void PickOrderFollowsTheActionSequenceAndIgnoresBans()
+    {
+        const string json = """
+            {
+              "myTeam": [
+                { "cellId": 0, "team": 1, "championId": 22, "nameVisibilityType": "VISIBLE", "puuid": "a" },
+                { "cellId": 1, "team": 1, "championId": 64, "nameVisibilityType": "VISIBLE", "puuid": "b" }
+              ],
+              "theirTeam": [
+                { "cellId": 5, "team": 2, "championId": 99, "nameVisibilityType": "VISIBLE", "puuid": "c" }
+              ],
+              "actions": [
+                [ { "actorCellId": 5, "type": "ban", "completed": true },
+                  { "actorCellId": 0, "type": "ban", "completed": true } ],
+                [ { "actorCellId": 5, "type": "pick", "completed": true } ],
+                [ { "actorCellId": 1, "type": "pick", "completed": true },
+                  { "actorCellId": 0, "type": "pick", "completed": false } ]
+              ]
+            }
+            """;
+
+        var result = LeagueSessionParser.ParseChampSelectMembers(json);
+
+        // Bans do not consume a pick number, so the enemy cell that picked first is 1.
+        Assert.Equal(3, result.Single(member => member.StableKey == "cell-0-100").PickOrder);
+        Assert.Equal(2, result.Single(member => member.StableKey == "cell-1-100").PickOrder);
+        Assert.Equal(1, result.Single(member => member.StableKey == "cell-5-200").PickOrder);
+    }
+
+    [Fact]
+    public void PickOrderIsAbsentWhenTheClientReportsNoActions()
+    {
+        const string json = """
+            {
+              "myTeam": [
+                { "cellId": 0, "team": 1, "championId": 22, "nameVisibilityType": "VISIBLE", "puuid": "a" }
+              ],
+              "theirTeam": []
+            }
+            """;
+
+        var result = LeagueSessionParser.ParseChampSelectMembers(json);
+
+        Assert.Null(result.Single().PickOrder);
+    }
+
+    [Fact]
     public void LivePlayerParserAcceptsRiotFieldCasing()
     {
         const string json = """

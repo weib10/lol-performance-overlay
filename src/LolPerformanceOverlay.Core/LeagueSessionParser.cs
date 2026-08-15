@@ -9,10 +9,52 @@ internal static class LeagueSessionParser
     public static IReadOnlyList<ParsedChampSelectMember> ParseChampSelectMembers(string json)
     {
         using var document = JsonDocument.Parse(json);
+        var pickOrder = ParsePickOrder(document.RootElement);
         var result = new List<ParsedChampSelectMember>();
-        ParseTeam(document.RootElement, "myTeam", result);
-        ParseTeam(document.RootElement, "theirTeam", result);
+        ParseTeam(document.RootElement, "myTeam", pickOrder, result);
+        ParseTeam(document.RootElement, "theirTeam", pickOrder, result);
         return result;
+    }
+
+    /// <summary>
+    /// Champ select draws its turn structure from `actions`: an array of phases, each
+    /// holding the actions taken in that phase. Reading the pick actions in that order
+    /// gives every cell its place in the pick sequence, which survives a later position
+    /// swap because the swap moves champions between cells rather than reordering turns.
+    /// Bans are skipped so the number matches what a player counts as "first pick".
+    /// </summary>
+    private static IReadOnlyDictionary<int, int> ParsePickOrder(JsonElement root)
+    {
+        var order = new Dictionary<int, int>();
+        if (TryGet(root, "actions") is not { ValueKind: JsonValueKind.Array } actions)
+        {
+            return order;
+        }
+
+        foreach (var phase in actions.EnumerateArray())
+        {
+            if (phase.ValueKind != JsonValueKind.Array)
+            {
+                continue;
+            }
+
+            foreach (var action in phase.EnumerateArray())
+            {
+                if (action.ValueKind != JsonValueKind.Object ||
+                    !string.Equals(ReadString(action, "type"), "pick", StringComparison.OrdinalIgnoreCase))
+                {
+                    continue;
+                }
+
+                var actorCellId = ReadInt(action, "actorCellId");
+                if (actorCellId >= 0 && !order.ContainsKey(actorCellId))
+                {
+                    order[actorCellId] = order.Count + 1;
+                }
+            }
+        }
+
+        return order;
     }
 
     public static ParsedGameStats ParseGameStats(string json)
@@ -116,6 +158,7 @@ internal static class LeagueSessionParser
     private static void ParseTeam(
         JsonElement root,
         string propertyName,
+        IReadOnlyDictionary<int, int> pickOrder,
         ICollection<ParsedChampSelectMember> result)
     {
         if (TryGet(root, propertyName) is not { ValueKind: JsonValueKind.Array } team)
@@ -149,7 +192,8 @@ internal static class LeagueSessionParser
                 ReadInt(member, "championId") is var championId && championId > 0
                     ? championId
                     : ReadInt(member, "championPickIntent"),
-                hidden));
+                hidden,
+                pickOrder.TryGetValue(cellId, out var order) ? order : null));
         }
     }
 
@@ -219,7 +263,8 @@ internal sealed record ParsedChampSelectMember(
     string? Puuid,
     int Team,
     int ChampionId,
-    bool IsAnonymous);
+    bool IsAnonymous,
+    int? PickOrder);
 
 internal sealed record ParsedGameStats(double GameTimeSeconds, string GameMode);
 
