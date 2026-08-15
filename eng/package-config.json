@@ -72,8 +72,11 @@
     ],
     "developerPathRegexes": [
       "(?i)[A-Z]:\\\\Users\\\\[^\\\\\"'\\r\\n]+",
-      "/home/(?!agent/)[^/\\s]+/",
+      "/home/[^/\\s]+/",
       "/Users/[^/\\s]+/"
+    ],
+    "sandboxPathAllowanceRegexes": [
+      "^/home/agent/"
     ],
     "rawOverlayFieldNames": [
       "Kills",

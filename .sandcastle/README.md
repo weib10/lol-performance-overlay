@@ -99,6 +99,29 @@ candidate `HEAD`。
 不建立／更新 PR，也不 merge。這是 ownership boundary：`brant92good` 的 collaborator
 權限只證明 GitHub 允許寫入，不等於 repository owner 已授權這個自動流程。
 
+同一條 ownership boundary 也決定哪些 Issue 算工作來源：`validateIssue()` 要求 Issue 的
+author node ID 等於 `trustedActor`。其他人開的 Issue——包含 delivery actor 自己開的——
+會 loud failure，不是安靜跳過。因此 `Sandcastle` label 或 `--issue N` 都無法讓 worker
+處理非 owner 開的 Issue；工作必須由 `trustedActor` 親自開 Issue 授權。目前 repository 上
+既有的 Issue 都不是 `weib10` 開的，所以在啟用後它們都不是可執行的工作來源。
+
+## 啟用前的前提：configured base 必須受保護
+
+`assertOwnerControlledCheckout` 只驗證 trusted host 位於 configured base branch，且本機
+`HEAD` 逐位等於 host 重新讀取的 GitHub base SHA。它**不驗證那個 commit 是誰寫的**。
+
+`host-poll.mts` 每次 poll 會先把 configured base fast-forward 下來，再從**剛取得的那份**
+`project.json` 決定要不要傳 `--allow-delivery`，然後 `npm ci`、build image、執行 worker。
+因此凡是能 push 到 configured base 的人，都能同時決定 host 上執行什麼程式碼、以及
+`delivery.enabled` 的值。`localHeadSha === githubBaseSha` 擋得住 collaborator 的**本機**
+commit，擋不住已經 push 上去的 commit。
+
+真正的 ownership boundary 是 configured base 的 branch protection，而 worker 無法自行驗證
+它：讀取 protection rules 需要 admin 權限，delivery actor 只有 exact `WRITE`。所以在把
+`delivery.enabled` 改成 `true` 之前，repository owner 必須先在 GitHub 上對 configured base
+啟用 branch protection，至少禁止直接 push 並要求 owner review 的 pull request。沒有這一步，
+下面所有 gate 都只是在保護一條任何 write collaborator 都能改寫的 branch。
+
 ## Repository owner 啟用 host delivery
 
 Owner 審查程式與上方 immutable identity 後，才將 [project.json](project.json) 改為：
@@ -123,7 +146,8 @@ npm run sandcastle -- --allow-delivery
 GitHub mutation。啟用時 trusted host 必須位於乾淨的
 `agent/linux-usability-release`，而且本機 `HEAD` 必須
 逐位等於 host 重新讀取的 GitHub base SHA；因此 collaborator 自己的 local commit
-不能冒充 owner 授權。啟用後，host worker
+不能冒充 owner 授權——但已經 push 到 configured base 的 commit 可以，所以這一項不能
+取代上一節要求的 branch protection。啟用後，host worker
 也只能在通過 implementation、project gates、
 independent review 和 final-SHA verification 後：
 

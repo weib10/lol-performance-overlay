@@ -27,6 +27,11 @@ push 已驗證的 exact SHA、建立／更新唯一 draft PR 和 bounded harness
 Issue close、deploy、release、publish、branch deletion、force-push、admin merge 與
 auto-merge 永遠不在 worker 權限內。
 
+啟用 delivery 的前提是 configured base branch 已在 GitHub 上受保護。Worker 只驗證本機
+HEAD 等於 GitHub base SHA，不驗證那個 commit 的作者，而 host poller 會先 fast-forward 該
+branch 再從它讀取 `delivery.enabled`；能 push 到 base 的人因此同時決定執行什麼程式碼和
+是否啟用。工作來源也必須是 `trustedActor` 親自開的 Issue，其他人開的會 loud failure。
+
 不要假設文件一定正確；以目前程式碼、實際執行結果和量測為準，發現落差時同步修正文件。
 
 ## 自動審視責任

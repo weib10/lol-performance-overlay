@@ -175,11 +175,68 @@ public sealed class PackagePolicyTests
     }
 
     [Fact]
-    public void CanonicalSandcastleContainerHomeIsNotADeveloperPath()
+    public void CanonicalSandcastleContainerHomeIsExcusedOnlyWhereAnAllowanceIsPassed()
     {
         var patterns = ReadDeveloperPathPatterns();
+        var allowances = ReadSandboxPathAllowances();
+        const string text = "const mount = \"/home/agent/worktree/README.md\";";
 
-        Assert.DoesNotContain(patterns, pattern => pattern.IsMatch("/home/agent/worktree/README.md"));
+        // The product scans over shipped assemblies, the friend guide, and the ZIP
+        // pass no allowance, so the container home still has to be a violation there.
+        var productViolations = new List<string>();
+        PackageBuilder.AddRegexViolations(
+            productViolations,
+            "runtime.mts",
+            text,
+            patterns,
+            "developer machine path",
+            []);
+
+        var repositoryViolations = new List<string>();
+        PackageBuilder.AddRegexViolations(
+            repositoryViolations,
+            "runtime.mts",
+            text,
+            patterns,
+            "developer machine path",
+            allowances);
+
+        Assert.Single(productViolations);
+        Assert.Empty(repositoryViolations);
+    }
+
+    [Fact]
+    public void SandboxAllowanceNeverExcusesARealDeveloperHomeOnTheSameLine()
+    {
+        var patterns = ReadDeveloperPathPatterns();
+        var allowances = ReadSandboxPathAllowances();
+        var text = string.Concat("/home/agent/worktree and /home/", "developer-name", "/project/");
+        var violations = new List<string>();
+
+        PackageBuilder.AddRegexViolations(
+            violations,
+            "runtime.mts",
+            text,
+            patterns,
+            "developer machine path",
+            allowances);
+
+        Assert.Single(violations);
+    }
+
+    [Fact]
+    public void UnanchoredSandboxPathAllowanceIsRejected()
+    {
+        Assert.Throws<InvalidDataException>(() =>
+            PackageBuilder.ValidateSandboxPathAllowances(new ScanConfig
+            {
+                SandboxPathAllowanceRegexes = ["/home/agent/"]
+            }));
+
+        PackageBuilder.ValidateSandboxPathAllowances(new ScanConfig
+        {
+            SandboxPathAllowanceRegexes = ["^/home/agent/"]
+        });
     }
 
     [Fact]
@@ -542,6 +599,16 @@ public sealed class PackagePolicyTests
         var repositoryRoot = FindRepositoryRoot();
         using var document = ReadPackageConfig(repositoryRoot);
         var patterns = ReadStrings(document.RootElement.GetProperty("scan"), "developerPathRegexes");
+        return PackageBuilder.CompileRegexes(patterns);
+    }
+
+    private static Regex[] ReadSandboxPathAllowances()
+    {
+        var repositoryRoot = FindRepositoryRoot();
+        using var document = ReadPackageConfig(repositoryRoot);
+        var patterns = ReadStrings(
+            document.RootElement.GetProperty("scan"),
+            "sandboxPathAllowanceRegexes");
         return PackageBuilder.CompileRegexes(patterns);
     }
 
