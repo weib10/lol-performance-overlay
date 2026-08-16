@@ -367,9 +367,9 @@ public sealed class OverlayWindow : Window
 
         // The rank/history panel is paused pending a decision on where profile data
         // comes from -- not deleted. BuildHistoryPanel() still constructs it and
-        // UpdateHistoryControls() still keeps it current, so the fetch pipeline in
-        // App.xaml.cs keeps working unchanged; it is simply not mounted into the
-        // visible layout, so re-adding it later is a one-line change.
+        // UpdateHistoryControls() still keeps it current, so the application startup
+        // class's fetch pipeline keeps working unchanged; it is simply not mounted
+        // into the visible layout, so re-adding it later is a one-line change.
         BuildHistoryPanel();
 
         var teamsGrid = new Grid { Margin = new Thickness(10, 0, 10, 8) };
