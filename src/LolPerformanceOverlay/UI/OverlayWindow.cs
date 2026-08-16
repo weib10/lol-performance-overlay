@@ -205,7 +205,7 @@ public sealed class OverlayWindow : Window
         var workAreas = GetWorkAreas();
         var result = OverlayPlacement.Clamp(
             new DipPoint(double.NaN, double.NaN),
-            new DipSize(Math.Max(ActualWidth, Width), Math.Max(ActualHeight, Height)),
+            CurrentDipSize(),
             workAreas);
         Left = result.Position.X;
         Top = result.Position.Y;
@@ -271,6 +271,7 @@ public sealed class OverlayWindow : Window
 
     private UIElement BuildDot()
     {
+        SizeToContent = SizeToContent.Manual;
         Width = 38;
         Height = 38;
         var root = new Grid
@@ -292,6 +293,7 @@ public sealed class OverlayWindow : Window
 
     private UIElement BuildCompact()
     {
+        SizeToContent = SizeToContent.Manual;
         Width = 460;
         Height = _visualWasChampSelect ? 120 : 112;
         var root = Card();
@@ -350,8 +352,11 @@ public sealed class OverlayWindow : Window
 
     private UIElement BuildExpanded()
     {
+        // A fixed height cannot fit champ select, a live game, and the history panel
+        // in both its states without leaving dead space in the shortest of them. Let
+        // the content decide; ClampToWorkArea reads ActualHeight while this is on.
         Width = 648;
-        Height = 552;
+        SizeToContent = SizeToContent.Height;
         var root = Card();
         var layout = new DockPanel();
         var header = BuildHeader(allowSettings: true);
@@ -1221,7 +1226,7 @@ public sealed class OverlayWindow : Window
         {
             var result = OverlayPlacement.Clamp(
                 new DipPoint(Left, Top),
-                new DipSize(Math.Max(ActualWidth, Width), Math.Max(ActualHeight, Height)),
+                CurrentDipSize(),
                 GetWorkAreas());
             Left = result.Position.X;
             Top = result.Position.Y;
@@ -1402,6 +1407,15 @@ public sealed class OverlayWindow : Window
         brush.Freeze();
         return brush;
     });
+
+    /// <summary>
+    /// Expanded sizes its height to content, which leaves Height as NaN. Math.Max
+    /// propagates NaN, so reading the two together without this would hand the
+    /// placement clamp a NaN size and stop it keeping the window on screen.
+    /// </summary>
+    private DipSize CurrentDipSize() => new(
+        double.IsNaN(Width) ? ActualWidth : Math.Max(ActualWidth, Width),
+        double.IsNaN(Height) ? ActualHeight : Math.Max(ActualHeight, Height));
 
     private static string TeamColor(int team) => team is 100 or 1 ? "#74B7FF" : "#FF8797";
 
