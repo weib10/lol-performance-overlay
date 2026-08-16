@@ -17,7 +17,9 @@
 曾經有一套 Sandcastle worker（`c52fc15`），已在 2026-08-15 完整移除：它的 ownership
 boundary 依賴 base branch 的 protection，而 worker 無法自行驗證，因此不再使用。不要
 重新引入會自動 push、開 PR、merge 或在主機上定時執行 repository 程式碼的機制；需要
-時請先和使用者確認。
+時請先和使用者確認。相關的 `agent/linux-usability-release` 與
+`sandcastle/issue-worker-deployment` branch 已在 2026-08-16 刪除（所有 commit 都是
+`main` 的祖先，沒有內容遺失）；`main` 現在是唯一分支，只看到一條分支是預期狀態。
 
 該 worker 是這個 repository 唯一用過 Node 的東西，`package.json` 已隨它移除。但
 `node_modules` 仍然刻意留在 `.gitignore` 和 `eng/package-config.json` 的
@@ -59,6 +61,8 @@ release gate 的乾淨 Git tree 檢查會失敗，repository scan 也會去走�
   未花費金錢，把裝備值稱作總經濟會高估。
 - 可以研究並使用官方 Riot API、OP.GG 公開頁面或其他歷史資料，但必須遵守下方的「歷史資料來源規則」；匿名身分還原、遊戲注入和自動輸入仍然禁止。
 - 不因功能困難而靜默縮小範圍；若必須調整產品承諾，要在文件中清楚記錄原因。
+- `OverlayWindow` 的 Expanded 面板用 `SizeToContent.Height`；任何用 `Visibility` 隱藏／還原的子元素（例如隊伍卡片、歷史面板）都必須用 `Collapsed`，不能用 `Hidden`——`Hidden` 仍保留版面空間，會讓視窗卡在最高狀態，在對局結束等「應該收起空間」的時刻反而最明顯。
+- Push 之後要實際確認 CI 結果，不能以「本機建置與測試都過」當作驗證完成。本機沒有跑 release scan 這道 gate（敏感字串、開發者路徑、raw overlay 欄位等），只在 CI 上執行。
 
 ## 歷史資料來源規則
 
@@ -66,6 +70,8 @@ release gate 的乾淨 Git tree 檢查會失敗，repository scan 也會去走�
 - 建立小而明確的歷史資料 interface，至少要有 `Synthetic` 測試 adapter、正式 live adapter 和 unavailable／failure fallback。假資料可完整驗證 UI、評分、極端值與樣本不足，但正式 package 不得把假資料冒充真人資料。
 - 歷史 profile 至少包含來源、取得時間、queue／mode、樣本數與信心。UI 必須把「本場即時表現」和「歷史近期狀態／風格」分開，不能混成一個無法解釋的總分。
 - Riot API key 不得寫入原始碼、設定範例、log、fixture、EXE 或 ZIP。公開散布若依賴 Riot API，必須使用符合 Riot 規則的 Production Key 架構；不能把 development／personal key 藏進朋友版。
+  這條規則限制的是「散布給多個朋友的同一份版本」。使用者自己申請、只存在自己電腦本機設定（不進 git、不進打包）的 Personal key，供申請者本人或小型私人社群使用，是 Riot 官方文件明確允許的用法，不要因為這條規則而拒絕實作「本機貼入自己 key」這種功能；只要確保 key 真的不會出現在打包產物或 repository 裡。
+- 歷史 profile 允許只有官方牌位、沒有對局風格樣本的狀態（`HistoricalProfile.PlayStyle` 可為 `null`）。這代表「資料來源沒有比賽紀錄可算」，不是實作疏漏；不要為了滿足非空檢查而編造風格讀數。
 - OP.GG 只能透過有明確允許依據的公開資料方式使用；不得依賴未公開私有端點、繞過存取控制或高頻抓取。必須標註來源、限制頻率、加快取，並在 OP.GG 失效時讓核心 Overlay 正常運作。
 - OP.GG 的 Help Center 與網站條款對 scraping 存在文字衝突；在取得較明確授權前，不能把 scraping 當成唯一正式資料來源。詳見 `docs/HISTORICAL_DATA_RESEARCH.md`。
 - 新資料來源要有 schema／fixture、timeout、cancellation、rate-limit、cache、stale-data 和 malformed-response 測試，且任何網路工作不得阻塞 UI thread。

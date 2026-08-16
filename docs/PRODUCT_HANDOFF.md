@@ -1,6 +1,11 @@
 # LoL 即時表現 Overlay：產品與 Codex 交接文件
 
-更新日期：2026-08-10
+更新日期：2026-08-16
+
+> 這份文件是累積寫成的，第 1–14 節多數段落寫於 2026-08-10 或更早，第 15、16 節是後續
+> 里程碑。閱讀時請注意：較早的段落描述問題或計畫時，若後面的里程碑已經處理，內文會加
+> 上「[狀態：...]」標記並指向對應章節；沒有標記的段落視為仍然有效。最新狀態一律以第 16
+> 節與目前程式碼為準，不要只看章節編號較前面的敘述就當作現況。
 
 ## 1. 交接目的
 
@@ -23,18 +28,19 @@
 ## 3. 目前狀態
 
 - Repository：`https://github.com/weib10/lol-performance-overlay`
-- 主要分支：`main`
+- 主要分支：`main`（唯一分支；2026-08-16 起 `agent/linux-usability-release` 與相關 PR branch 已刪除，見第 16 節）
 - 現有公開基準：`v1.0.1-test` prerelease
 - 平台：Windows 10／11 x64
 - 技術：.NET 8、WPF、自包含單檔 EXE
 - 顯示模式：Dot、Compact、Expanded
 - 資料來源：League Client 本機資料、遊戲內 `127.0.0.1:2999`、Riot 靜態素材
-- 歷史資料：已有 source-neutral model、Synthetic provider 與 unavailable／policy-disabled fallback；沒有合規 live provider 時不查真人資料，OP.GG 僅提供使用者主動開啟的瀏覽器連結
-- 自動測試：核心測試已拆成 `net8.0`，可在 Linux 執行；Windows shell 的編譯與互動仍由 Windows runner／真機負責
-- 候選包：repository 內的共用 PackageBuilder 由 Linux shell 與 Windows PowerShell 入口共同呼叫，產生 EXE + 完全離線 HTML 的兩檔 ZIP、manifest 與 SHA-256
+- 歷史資料：已有 source-neutral model、Synthetic provider 與 unavailable／policy-disabled fallback；沒有合規 live provider 時不查真人資料，OP.GG 僅提供使用者主動開啟的瀏覽器連結。2026-08-16 起 model 額外支援「只有官方牌位、沒有對局風格樣本」的狀態，見第 16 節。
+- 自動測試：核心測試已拆成 `net8.0`，可在 Linux 或 Windows 執行；本機開發機（Windows）已確認可直接建置、跑測試、執行 WPF shell（SDK 位於 `%LOCALAPPDATA%\Microsoft\dotnet`，PATH 上的 `dotnet.exe` 可能指向沒有 SDK 的版本，需留意），不必每次都繞 CI。CI 目前只在 `windows-latest` 執行。
+- 候選包：repository 內的共用 PackageBuilder 由 `scripts/package.sh`（Linux／WSL 可用）與 `scripts/package.ps1`（Windows）共同呼叫，產生 EXE + 完全離線 HTML 的兩檔 ZIP、manifest 與 SHA-256。CI（`.github/workflows/windows-package.yml`）只呼叫 Windows 入口。
 - 現有 Release 不應直接重新命名為正式版；它是比較修正前後行為的基準。
+- `outputs/` 目錄下若有既有 package，可能是很舊的建置（例如仍記錄 2026-08-11 前的 commit）；展示或分享前務必重新打包，不要假設它反映目前程式碼。
 
-目前已知還沒有足夠證據證明：真實長時間對局順暢、多螢幕與 DPI 完整、Client 重啟可靠、一般朋友能無協助完成所有操作，以及乾淨環境可重現打包。
+目前已知還沒有足夠證據證明：真實長時間對局順暢、真實滑鼠拖曳手感、多螢幕與 DPI 完整、Client 重啟可靠、一般朋友能無協助完成所有操作，以及乾淨環境可重現打包。2026-08-16 起，已有本機 Windows 建置的實際畫面截圖與版面尺寸驗證（見第 16 節），但那是靜態渲染與視窗尺寸的驗證，**不包含**實際滑鼠拖曳、焦點搶奪、click-through 或多螢幕／DPI 測試；不要把「畫面截圖看起來對」誤讀成「互動已驗證」。
 
 ## 4. 使用者實測後的核心回饋
 
@@ -55,11 +61,27 @@
 - Overlay 互動模型沒有被當成一個完整產品設計。
 - 更新／渲染流程沒有以低延遲、低配置和 UI 執行緒安全為核心。
 
+### 4.1 2026-08-16 第二輪實測回饋
+
+使用者在本機看到實際畫面後，提出以下具體回饋（依提出順序）：
+
+1. 選角希望能分紅藍方，且記得選角順序（換位置後才不會忘記對面先選後選，方便猜 BP）。
+2. 設定視窗點不到——因為 Overlay 視窗固定在最上層，設定視窗開在它下面被蓋住。
+3. 想顯示官方牌位。
+4. 字太小，看是換字體、放大或加粗比較舒服。
+5. 放大後 Expanded 面板有太多無用空間。
+6. 希望顯示身上裝備加總的價值。
+7. 收到第一版畫面後：面板還是太吵、字不夠顯眼、佔用空間仍嫌多，要求參考 op.gg app 的精簡風格重做。
+
+處理結果與各項目對應章節見第 16 節；牌位（第 3 項）依使用者指示暫緩，只完成資料模型的地基（見第 16 節「牌位資料模型」）。
+
 ## 5. 已知實作與可能根因
 
 以下是從目前程式碼得到的高可信假設；下一個 Codex 必須先用 profiler、計時與操作重現確認，不能把假設直接當結論。
 
 ### 5.1 畫面更新可能造成卡頓
+
+[狀態：`e0d287a`（早於本文件初版）已處理此架構面問題。`OverlayWindow` 現有兩個 `ApplySnapshot` 多載，其中一個接受 `OverlaySnapshotDiff` 並只更新變化欄位，不是每次都重建整棵樹。以下描述的是修正前的舊行為，保留作為問題脈絡，不代表目前程式碼。]
 
 `OverlayWindow.ApplySnapshot()` 每收到一次 snapshot 就呼叫 `Render()`，而 `Render()` 會依模式重新建立整棵 WPF visual tree。遊戲資料目前約每秒更新一次，即使顯示內容變化很小，也會重新建立 Border、Grid、TextBlock、Button、Image 等物件。
 
@@ -79,6 +101,8 @@ Session loop 從 WPF startup 啟動，async iterator、HTTP await、JSON parsing
 目標不是到處加 `Task.Run`，而是建立清楚的更新 module：背景取得與計算、合併／節流、最後只把最小 UI diff 送到 Dispatcher。
 
 ### 5.3 拖曳與 click-through 是脆弱的 Tag 規則
+
+[狀態：已有 `PointerInteractionStateMachine`、`OverlayInteractionPolicyRules`／`OverlayInteractionPolicy` 這組可測試的 seam 取代純 Tag 規則，`src/LolPerformanceOverlay.Core/Interaction/` 下有對應測試。這代表**設計上**的可測試性問題已處理；不代表真實滑鼠拖曳手感、click-through 或多螢幕/DPI 已經過真機驗證——這些仍是未完成項目，見第 16 節。以下描述的是修正前的舊行為，保留作為問題脈絡。]
 
 目前 WPF hit testing 透過 `Tag = "Drag"` 和 `Tag = "Interactive"` 配合 `WM_NCHITTEST`：
 
@@ -103,6 +127,7 @@ Session loop 從 WPF startup 啟動，async iterator、HTTP await、JSON parsing
 歷史資料不是被禁止的方向，但不能直接把「抓得到」等同於「適合放進公開朋友版」。目前需要處理：
 
 - Riot 官方 API 適合取得牌位與 Match-V5 對局資料，但 API key 不得放入要散布的 EXE；development key 會過期，personal key 也不能供公開 alpha／beta 使用。公開產品通常需要 Production Key，以及能保護 key 的 server-side 或等價架構。
+  [補充，2026-08-16] 這條規則限制的是「散布給朋友的版本」。如果 key 是使用者自己申請、只存在自己電腦的本機設定（不進 git、不進打包），且產品仍只供申請者本人或極小型私人社群使用，Riot 官方文件明確允許：「Personal API keys should be used for products that are intended for just the developer or a small private community.」兩種情境不要混為一談：本機、自己用、自己的 key＝可以；同一把 key 隨公開發布的 EXE 給多個朋友用＝不行，即使技術上是「手動貼上去」也一樣違反「public consumption」限制。Development key 每 24 小時失效需手動重置，Personal key 沒有這個限制但需要走一次線上申請表單（非 Production 那種人工審核）。
 - Riot 的遊戲完整性規則禁止分析刻意隱藏的玩家，也禁止自製 MMR／ELO 等官方天梯替代品。因此歷史功能應呈現官方牌位、近期樣本、風格與不確定性，而不是宣稱算出真正實力或隱藏分數。
 - OP.GG 第一方 Help Center 表示一般不禁止低頻 crawling／scraping，但其網站使用條款又有禁止 scraping 的文字。兩者衝突，需保守處理、標註來源並避免把它當唯一正式依賴。
 - OP.GG 沒有把內部遊戲資料 API 提供給第三方；抓頁面或未公開端點會有版面／schema 變更、封鎖、資料新鮮度、rate limiting 和維護成本。
@@ -281,9 +306,20 @@ Session loop 從 WPF startup 啟動，async iterator、HTTP await、JSON parsing
 
 ## 12. 下一個 Codex 的建議第一個任務
 
-可直接使用以下提示：
+2026-08-11 的原始期限已過，這份提示是歷史記錄，保留供比對；目前真正待辦以下方「2026-08-16 起建議任務」為準。
+
+<details>
+<summary>2026-08-10 原始提示（已過期，僅供參考）</summary>
 
 > 完整閱讀 AGENTS.md、docs/PRODUCT_HANDOFF.md、docs/HISTORICAL_DATA_RESEARCH.md、README.md 與 SECURITY.md。目標是在 2026-08-11 交付可下載、可操作、可驗收的完整候選版本，不要停在分析。先用 Replay 量測並修正 P0：Dot click／drag、面板大範圍拖曳、UI thread、長生命週期 UI、圖片快取和 snapshot 去重。並行以 Synthetic history adapter 完成歷史近期狀態／風格的 UI、schema、樣本不足與失效測試。若已有 Riot Production API 或 OP.GG 書面允許，再接 live adapter；否則交付清楚的 unavailable／PolicyDisabled 狀態和可選的瀏覽器 OP.GG 連結，禁止為趕日期偷偷 scraping、把 API key 放進 EXE、分析匿名玩家或產生自製 MMR／ELO。最後把 repository 內的一鍵 test／publish／hash／scan／ZIP 流程做完，產生 candidate package，跑自動測試與必要 Replay／真實驗收，依正式發布門檻列出仍未通過的項目。不要僅靠改名宣稱正式版。
+
+</details>
+
+### 2026-08-16 起建議任務
+
+P0 的架構性問題（長生命週期 UI、pointer state machine、snapshot 去重、打包流程）已經處理，Sandcastle 自動化工具已完整移除，Overlay 版面也依第二輪使用者實測回饋大幅精簡（見第 16 節）。下一個真正的瓶頸是**真機互動驗證**，不是再寫更多程式：
+
+> 完整閱讀 AGENTS.md、docs/PRODUCT_HANDOFF.md（特別是第 16 節）與 SECURITY.md。這台機器上 .NET SDK 已可用（見第 3 節路徑備註），先確認能本機建置、跑測試、把 WPF shell 跑起來。用真的滑鼠對 Dot／Compact／Expanded 做拖曳、click-through、鎖定位置測試，不要只靠螢幕截圖判斷「看起來對」。若條件允許，跑一次真實 ChampSelect → Loading → InGame → EndOfGame 全流程，記錄真實 CPU／記憶體／UI 更新延遲，取代目前僅有的 Linux 邏輯層 proxy 數字。若要接牌位資料，Core model 已支援 rank-only profile；下一步是 `IHistoricalProfileTransport` 的 Riot Personal-key 實作與 Settings 裡的 key 輸入欄位（本機儲存，不進 git／不進打包）。每次 push 後務必確認 CI 實際結果，不要只憑本機建置成功就當作驗證完成——本機沒有跑 release scan 那道 gate。
 
 ## 13. 重要檔案導覽
 
@@ -361,3 +397,63 @@ Session loop 從 WPF startup 啟動，async iterator、HTTP await、JSON parsing
 目前 Linux Release 驗證為跨平台 Core 150／150 與 PackageBuilder policy 22／22 通過；`net8.0-windows` WPF shell 和 Windows integration tests 均以 `EnableWindowsTargeting=true`、單一 MSBuild node cross-build，0 warning／0 error。Windows-only tests 尚須由 Windows runner 實際執行。
 
 修改前的 `OverlayWindow.ApplySnapshot()` 對每個 frame 呼叫 `Render()`，Expanded 每次又對最多十名玩家建立 `BitmapImage`；因此相同 1,800-frame corpus 會走 1,800 次 visual-tree rebuild 與最多 18,000 次 decode 路徑。修改後 mode 內 visual tree 長生命週期、同一路徑圖片只在背景 decode 一次；實際 Windows decode count、UI update P95、CPU、GC 與拖曳 frame pacing仍須由 Windows 真機量測，不能用上述 Linux proxy 取代。
+
+## 16. 2026-08-16 里程碑：Sandcastle 移除、真機互動修正、牌位資料模型
+
+這輪工作起點是審查另一位協作者導入的自動化，途中處理了使用者兩輪真機實測回饋，收尾於牌位功能的資料模型地基。完整 commit 序列見 `git log`；這裡只記錄決策、量測與仍未完成的部分。
+
+### Sandcastle Issue worker：審查、修正、完整移除
+
+`main` 上一度有一套自動化 GitHub Issue worker（PR #5，commit `c52fc15`），會讓一台受信任主機每兩分鐘 poll 一次 `agent/linux-usability-release` branch 並執行其上的程式碼。審查發現：
+
+- 它宣稱的 ownership boundary（`assertOwnerControlledCheckout`）只驗證本機 HEAD 等於 GitHub base SHA，**不驗證那個 commit 的作者**；真正的邊界是 base branch 的 GitHub branch protection，而 worker 本身無法驗證 protection 是否存在。當時該 branch 沒有開保護。
+- `trustedActor` 設定為 `weib10`，但 repository 上既有的 Issue 全是另一位協作者開的，代表 worker 實際上處於「作者不符、無法選中任何工作」的狀態，即使啟用也動不了。
+- Sandcastle 自己的約 2,800 行 TypeScript 測試沒有接進任何 CI，implement/review/gate 這條鏈完全沒被驗證過。
+
+決定完整移除而非只停用：`delivery.enabled`／`merge.enabled` 當時都是 `false`（fail-closed），但留著一套完整、任何 write collaborator 都能重新啟用的自動化，風險大於保留它的價值。移除範圍：`.sandcastle/` 全部、`package.json`／`package-lock.json`／`.nvmrc`（只為它存在的 Node toolchain）、`docs/SANDCASTLE_SETUP_RESEARCH.md`，並回收當初為容納它而放寬的 release scan 規則（`developerPathRegexes` 曾經排除 `/home/agent/`，已還原成嚴格版本）。`agent/linux-usability-release` 與 PR 來源 branch `sandcastle/issue-worker-deployment` 已確認所有 commit 都是 `main` 的祖先後刪除；`main` 現在是唯一分支。程式碼仍在 git 歷史的 `c52fc15`，需要時可 `git revert` 找回，但不建議重新啟用。
+
+### 真機開發環境：SDK 其實已經在
+
+這台開發機的 `dotnet.exe` 在 PATH 上，但那份只有 .NET 6 runtime、零個 SDK；一開始誤判為「沒裝 SDK」。實際上 SDK 8.0.423（`global.json` 釘的版本）已經裝在 `%LOCALAPPDATA%\Microsoft\dotnet`，只是沒在 PATH 最前面。用完整路徑呼叫後，本機建置／測試／執行 WPF shell 全部可行，161 項核心測試本機執行約 300–400 毫秒，相較每次繞 CI 的 2–3 分鐘差距很大。後續在本機修改、用 Replay/demo 模式（`--demo` 或 `--demo-expanded` 啟動參數）把 Overlay 實際跑起來，用 Win32 API 找視窗控制代碼、`System.Drawing.Bitmap.CopyFromScreen` 截取視窗矩形驗證版面——這是**畫面渲染與尺寸的驗證**，過程中沒有做實際滑鼠拖曳、click-through 或多螢幕/DPI 測試，不要混為一談。
+
+### 第二輪使用者回饋逐項處理
+
+對應第 4.1 節列出的七項回饋：
+
+| 回饋 | 處理 |
+|---|---|
+| 選角紅藍分邊、記錄選角順序 | `LeagueSessionParser` 新增從 LCU `actions` 陣列解析 pick 順序（跳過 ban，只算真正的 pick），`ChampSelectMember`／`OverlayPlayer` 新增 `PickOrder`。Compact 選角原本是十人攤平一排、敵我不分，改成左右兩欄各五格、各自標籤與顏色。 |
+| 設定視窗點不到 | 根因：`SettingsWindow` 從未設定 `Owner`，而 `OverlayWindow` 是 `Topmost = true`，對話框永遠開在下層碰不到。改為 `Owner = _overlay` 且自己也 `Topmost = true`。 |
+| 顯示官方牌位 | 依使用者指示暫緩（見下方「牌位資料模型」），先只完成 Core model 地基。 |
+| 字太小 | 玩家列／標題／隊伍標題字級全面調大；第二輪回饋後改為精簡版面（見下）。 |
+| Expanded 面板空間浪費 | 迭代三次：720×610 → 648×552（初次縮小）→ 實測發現底部仍有約 54px 死空間，改用 `SizeToContent.Height` 讓高度跟內容走 → 第二輪回饋要求進一步精簡，玩家列從每人 5 段文字（56px 高）砍成 1 行（頭像＋英雄名＋徽章＋分數，34px 高），玩家名／評語／逐列信心移到 tooltip，標題兩行併一行，歷史區塊整塊隱藏。最終尺寸 520×286（對局結束時 520×60）。 |
+| 顯示裝備加總價值 | 查證 Riot 政策：官方 Live Client Data API 本來就公開所有玩家的 `items`，單價是賽前既有的 Data Dragon 靜態資料，加總是對客戶端既有資訊做算術，屬於政策核可的 overlay 範圍。`AGENTS.md`／本文件第 10 節同步修訂為允許聚合總值（原始 item 陣列仍禁止），並標示為「裝備值」而非「經濟」——因為客戶端只回報本人的未花費金錢，稱作總經濟會高估。 |
+
+`SizeToContent` 改動過程中，實測發現一個真實 regression：對局結束、名單清空時，隊伍卡片用 `Visibility.Hidden`（保留版面空間但不可見），在舊的固定尺寸視窗下無感，但改成內容自適應高度後，會讓視窗卡在最高狀態——正好是最該收起空間的時刻。已改成 `Visibility.Collapsed` 並用即時量測視窗高度的方式驗證（對局結束時窗高確實收到 60px，只剩標題列）。
+
+### 牌位資料模型
+
+使用者詢問「自己申請 Riot API key、手動填入」是否合規。查證 Riot Developer Portal 原文確認：**只存在本機設定、不進 git／不進打包的 Personal key，供申請者本人或小型私人社群使用是官方允許的**；這跟「把 key 塞進發給多個朋友的同一份 EXE」是完全不同的兩件事，後者才是規則禁止的「public consumption」。詳細落款見第 5.4 節補充。
+
+要顯示牌位，Core 的 `HistoricalProfile` 型別原本強制要求 `PlayStyle`（五個對局風格維度）非空——即使資料來源只查了一次牌位、沒有比賽紀錄可以算，也被迫塞入編造的「Balanced」讀數，違反本文件與 `AGENTS.md` 的產品誠實性原則。已將 `PlayStyle` 改為可為 `null`，代表「沒有風格可讀」而非「風格中立」；`HistoricalProfileCoordinator` 的驗證邏輯本來就沒有依賴 `PlayStyle`，新增測試釘住這件事而非只是假設。UI 端（`OverlayWindow.UpdateHistoryControls`）已能正確處理 `PlayStyle` 為 null 的情況，但目前歷史面板整塊沒有掛進畫面（見上表），所以這條路徑還沒有實際畫面可驗證。
+
+**沒有做的**：實際的 `IHistoricalProfileTransport` 實作（呼叫 Riot `ACCOUNT-V1`／`LEAGUE-V4`）、Settings 裡貼 key 的欄位、region 對應。這是下一個獨立的工作項目，本次只確認合規性與鋪好 model 地基。
+
+### 過程中的一次 CI 疏失
+
+其中一次 push（隱藏歷史面板、標題併行的那次改動）讓 CI 的 release scan 失敗——註解裡寫的檔名 `App.xaml.cs` 被掃描規則當成 `Cs`（CreepScore 縮寫）獨立單字誤判（`.` 前、詞尾後，符合 `\b...\b` 邊界）。這個誤判本身合理（不該放寬 gate，改措辭即可），但過程有一個流程疏失：那次 push 之後我沒有回頭確認 CI 結果就繼續下一項工作，直到下一個 commit 才注意到、且一度誤記錯問題來源於哪個 commit。main 因此有約 70 分鐘處於 CI 紅燈但沒有主動回報。**根因是把「本機建置成功」誤當成「驗證完成」**——本機沒有跑 release scan 這道 gate，只有 build 和 test。已修正並確認後續每次 push 都有追蹤 CI 結果。
+
+### 本輪測試與 CI
+
+- 核心測試從 161 增至 163（新增選角順序解析、rank-only profile 驗證），加上 Windows 專屬 9 項、打包政策 29 項，共 201 項全數通過。
+- CI（`.github/workflows/windows-package.yml`）目前只在 `push`／`pull_request` 到 `main` 時觸發（Sandcastle 移除後也同步移除了舊 branch 的觸發條件）。
+- 最新驗證通過的 commit：`7942c14`。
+
+### 距離第 10 節發布門檻仍未完成
+
+- 三種模式的真實滑鼠拖曳、click-through、位置鎖定——本輪只驗證了畫面渲染與尺寸，沒有實際互動測試。
+- 兩台乾淨 Windows 環境的下載／安裝／完整對局／移除驗收；未參與開發的朋友測試。
+- 多螢幕、不同 DPI、解析度切換。
+- 真實對局的 CPU／記憶體／UI 更新延遲量測（現有數字仍是 Linux 邏輯層 proxy）。
+- `LICENSE` 檔仍未補上。
+- `outputs/` 目錄若有舊 package，早於本輪所有變動，展示前需重新打包。
