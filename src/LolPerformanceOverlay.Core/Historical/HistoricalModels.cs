@@ -323,7 +323,7 @@ public sealed record HistoricalProfile
         HistoricalConfidence confidence,
         IEnumerable<HistoricalChampionUsage> commonChampions,
         IEnumerable<HistoricalRoleUsage> commonRoles,
-        HistoricalPlayStyle playStyle,
+        HistoricalPlayStyle? playStyle,
         HistoricalProfileSource source)
     {
         if (sampleCount < 0)
@@ -344,7 +344,10 @@ public sealed record HistoricalProfile
             commonRoles,
             MaximumCommonRoleCount,
             nameof(commonRoles));
-        PlayStyle = playStyle ?? throw new ArgumentNullException(nameof(playStyle));
+        // Null here means "no play-style read on this profile" -- a rank-only source (a
+        // single ranked-entries lookup, no match history) has nothing to derive a style
+        // from. It is not the same as an empty style; there is no band to show at all.
+        PlayStyle = playStyle;
         Source = source ?? throw new ArgumentNullException(nameof(source));
     }
 
@@ -355,7 +358,7 @@ public sealed record HistoricalProfile
     public HistoricalConfidence Confidence { get; }
     public IReadOnlyList<HistoricalChampionUsage> CommonChampions { get; }
     public IReadOnlyList<HistoricalRoleUsage> CommonRoles { get; }
-    public HistoricalPlayStyle PlayStyle { get; }
+    public HistoricalPlayStyle? PlayStyle { get; }
     public HistoricalProfileSource Source { get; }
 
     private static IReadOnlyList<T> MaterializeBounded<T>(

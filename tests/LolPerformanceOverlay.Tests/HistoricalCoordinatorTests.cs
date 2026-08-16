@@ -28,6 +28,37 @@ public sealed class HistoricalCoordinatorTests
     }
 
     [Fact]
+    public async Task RankOnlyProfileWithNoPlayStylePassesValidationAndCaches()
+    {
+        // A rank-only transport (one ranked-entries lookup, no match history) has no style
+        // to report. IsValid must not treat a missing PlayStyle as malformed, and the
+        // profile must cache and return like any other valid one.
+        var clock = new HistoricalManualTimeProvider(Now);
+        var transport = new RecordingHistoricalTransport((player, query, _) =>
+            Task.FromResult(HistoricalProfileTransportResult.WithProfile(
+                HistoricalProfileAvailability.Available,
+                HistoricalTestData.Profile(
+                    player,
+                    query.Queue,
+                    clock.GetUtcNow(),
+                    sampleCount: 0,
+                    commonChampions: [],
+                    commonRoles: [],
+                    includePlayStyle: false))));
+        using var coordinator = CreateCoordinator(transport, clock);
+        var player = HistoricalTestData.Player(41);
+        var query = new HistoricalProfileQuery(HistoricalQueue.RankedSolo);
+
+        var first = await coordinator.GetProfilesAsync([player], query, CancellationToken.None);
+        var second = await coordinator.GetProfilesAsync([player], query, CancellationToken.None);
+
+        Assert.Equal(HistoricalProfileAvailability.Available, first.Availability);
+        Assert.Null(Assert.Single(first.Entries).Profile!.PlayStyle);
+        Assert.Equal(HistoricalProfileAvailability.Available, second.Availability);
+        Assert.Equal(1, transport.CallCount);
+    }
+
+    [Fact]
     public async Task DifferentQueuesDoNotShareCachedProfile()
     {
         var clock = new HistoricalManualTimeProvider(Now);

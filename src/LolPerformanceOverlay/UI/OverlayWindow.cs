@@ -989,11 +989,16 @@ public sealed class OverlayWindow : Window
                 $"來源：{profile.Source.DisplayName} · {profile.Queue.DisplayName} · {profile.SampleCount} 場 · " +
                 $"{profile.FetchedAt.ToLocalTime():MM/dd HH:mm} · {HistoricalConfidenceText(profile.Confidence)}";
             var champions = string.Join("、", profile.CommonChampions.Take(2).Select(item => item.ChampionName));
+            // A rank-only source (one ranked-entries lookup, no match history) has no
+            // style to read, so PlayStyle is null rather than an invented "balanced"
+            // reading. Say so instead of showing bands nothing backs.
+            var style = profile.PlayStyle is { } playStyle
+                ? $"激進 {StyleText(playStyle.Aggression.Band)}／生存 {StyleText(playStyle.Survival.Band)}／" +
+                  $"團隊 {StyleText(playStyle.TeamParticipation.Band)}／發育 {StyleText(playStyle.Farming.Band)}／" +
+                  $"英雄池 {StyleText(playStyle.ChampionPool.Band)}"
+                : "風格：僅牌位來源，無對局樣本";
             _historyDetails.Text =
-                $"常用：{(string.IsNullOrWhiteSpace(champions) ? "資料不足" : champions)} · " +
-                $"激進 {StyleText(profile.PlayStyle.Aggression.Band)}／生存 {StyleText(profile.PlayStyle.Survival.Band)}／" +
-                $"團隊 {StyleText(profile.PlayStyle.TeamParticipation.Band)}／發育 {StyleText(profile.PlayStyle.Farming.Band)}／" +
-                $"英雄池 {StyleText(profile.PlayStyle.ChampionPool.Band)}";
+                $"常用：{(string.IsNullOrWhiteSpace(champions) ? "資料不足" : champions)} · {style}";
             if (_historyPanel is not null)
             {
                 _historyPanel.Visibility = Visibility.Visible;

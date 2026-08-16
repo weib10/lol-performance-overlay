@@ -29,6 +29,29 @@ public sealed class HistoricalModelsTests
     }
 
     [Fact]
+    public void RankOnlyProfileHasNoPlayStyleInsteadOfAnInventedBand()
+    {
+        // A rank-only source is one ranked-entries lookup with no match history behind it.
+        // There is nothing to derive a style band from, so the model must allow leaving
+        // PlayStyle out rather than forcing a fabricated "balanced" reading.
+        var now = new DateTimeOffset(2026, 8, 16, 8, 0, 0, TimeSpan.Zero);
+        var profile = new HistoricalProfile(
+            HistoricalQueue.RankedSolo,
+            new OfficialRank(HistoricalQueue.RankedSolo, "GOLD", "III", 42),
+            sampleCount: 0,
+            fetchedAt: now,
+            HistoricalConfidence.InsufficientSample,
+            Array.Empty<HistoricalChampionUsage>(),
+            Array.Empty<HistoricalRoleUsage>(),
+            playStyle: null,
+            new HistoricalProfileSource(HistoricalSourceKind.LiveBackend, "官方牌位查詢"));
+
+        Assert.Null(profile.PlayStyle);
+        Assert.NotNull(profile.OfficialRank);
+        Assert.Empty(profile.CommonChampions);
+    }
+
+    [Fact]
     public void RevealedIdentityRejectsOversizedProviderFields()
     {
         Assert.False(RevealedPlayerIdentity.TryCreateNormallyRevealed(
@@ -77,11 +100,13 @@ public sealed class HistoricalModelsTests
         Assert.Equal(HistoricalConfidence.High, profile.Confidence);
         Assert.NotEmpty(profile.CommonChampions);
         Assert.NotEmpty(profile.CommonRoles);
-        Assert.False(string.IsNullOrWhiteSpace(profile.PlayStyle.Aggression.Explanation));
-        Assert.False(string.IsNullOrWhiteSpace(profile.PlayStyle.Survival.Explanation));
-        Assert.False(string.IsNullOrWhiteSpace(profile.PlayStyle.TeamParticipation.Explanation));
-        Assert.False(string.IsNullOrWhiteSpace(profile.PlayStyle.Farming.Explanation));
-        Assert.False(string.IsNullOrWhiteSpace(profile.PlayStyle.ChampionPool.Explanation));
+        Assert.NotNull(profile.PlayStyle);
+        var style = profile.PlayStyle!;
+        Assert.False(string.IsNullOrWhiteSpace(style.Aggression.Explanation));
+        Assert.False(string.IsNullOrWhiteSpace(style.Survival.Explanation));
+        Assert.False(string.IsNullOrWhiteSpace(style.TeamParticipation.Explanation));
+        Assert.False(string.IsNullOrWhiteSpace(style.Farming.Explanation));
+        Assert.False(string.IsNullOrWhiteSpace(style.ChampionPool.Explanation));
         Assert.Equal(HistoricalSourceKind.Synthetic, profile.Source.Kind);
         Assert.Contains("合成", profile.Source.DisplayName, StringComparison.Ordinal);
     }

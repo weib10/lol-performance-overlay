@@ -17,7 +17,8 @@ internal static class HistoricalTestData
         DateTimeOffset fetchedAt,
         int sampleCount = 20,
         IEnumerable<HistoricalChampionUsage>? commonChampions = null,
-        IEnumerable<HistoricalRoleUsage>? commonRoles = null) =>
+        IEnumerable<HistoricalRoleUsage>? commonRoles = null,
+        bool includePlayStyle = true) =>
         new(
             queue,
             queue.QueueId is 420 or 440 ? new OfficialRank(queue, "SILVER", "II", 42) : null,
@@ -26,12 +27,14 @@ internal static class HistoricalTestData
             sampleCount < 5 ? HistoricalConfidence.InsufficientSample : HistoricalConfidence.High,
             commonChampions ?? [new HistoricalChampionUsage("Synthetic Champion Alpha", Math.Min(8, sampleCount))],
             commonRoles ?? [new HistoricalRoleUsage("MIDDLE", sampleCount)],
-            new HistoricalPlayStyle(
-                new HistoricalStyleDimension(HistoricalStyleBand.Balanced, "合成交戰傾向"),
-                new HistoricalStyleDimension(HistoricalStyleBand.High, "合成存活傾向"),
-                new HistoricalStyleDimension(HistoricalStyleBand.Balanced, "合成團隊參與傾向"),
-                new HistoricalStyleDimension(HistoricalStyleBand.Low, "合成發育傾向"),
-                new HistoricalStyleDimension(HistoricalStyleBand.Balanced, "合成英雄池廣度")),
+            includePlayStyle
+                ? new HistoricalPlayStyle(
+                    new HistoricalStyleDimension(HistoricalStyleBand.Balanced, "合成交戰傾向"),
+                    new HistoricalStyleDimension(HistoricalStyleBand.High, "合成存活傾向"),
+                    new HistoricalStyleDimension(HistoricalStyleBand.Balanced, "合成團隊參與傾向"),
+                    new HistoricalStyleDimension(HistoricalStyleBand.Low, "合成發育傾向"),
+                    new HistoricalStyleDimension(HistoricalStyleBand.Balanced, "合成英雄池廣度"))
+                : null,
             new HistoricalProfileSource(HistoricalSourceKind.LiveBackend, "合成 transport fixture"));
 }
 
