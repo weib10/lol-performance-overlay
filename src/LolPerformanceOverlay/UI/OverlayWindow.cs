@@ -4,6 +4,7 @@ using Microsoft.Win32;
 using System.Windows;
 using System.Windows.Controls;
 using System.Windows.Controls.Primitives;
+using System.Windows.Documents;
 using System.Windows.Input;
 using System.Windows.Interop;
 using System.Windows.Media;
@@ -49,13 +50,14 @@ public sealed class OverlayWindow : Window
     private OverlaySnapshot _snapshot = OverlaySnapshot.Empty();
     private HistoricalProfilesResult? _historicalProfiles;
     private HwndSource? _source;
-    private TextBlock? _headerText;
-    private TextBlock? _summaryText;
+    private Run? _headerRun;
+    private Run? _summaryRun;
     private Border? _dot;
     private TextBlock? _compactLeft;
     private TextBlock? _compactLeftDetail;
     private TextBlock? _compactRight;
     private TextBlock? _compactRightDetail;
+    private Border? _historyPanel;
     private TextBlock? _historyStatus;
     private TextBlock? _historyMeta;
     private TextBlock? _historyDetails;
@@ -245,8 +247,8 @@ public sealed class OverlayWindow : Window
         _compactAvatars.Clear();
         _playerRows.Clear();
         _teamViews.Clear();
-        _headerText = null;
-        _summaryText = null;
+        _headerRun = null;
+        _summaryRun = null;
         _dot = null;
         _compactLeft = null;
         _compactLeftDetail = null;
@@ -355,7 +357,7 @@ public sealed class OverlayWindow : Window
         // A fixed height cannot fit champ select, a live game, and the history panel
         // in both its states without leaving dead space in the shortest of them. Let
         // the content decide; ClampToWorkArea reads ActualHeight while this is on.
-        Width = 648;
+        Width = 520;
         SizeToContent = SizeToContent.Height;
         var root = Card();
         var layout = new DockPanel();
@@ -363,22 +365,14 @@ public sealed class OverlayWindow : Window
         DockPanel.SetDock(header, Dock.Top);
         layout.Children.Add(header);
 
-        var footer = Text(
-            _snapshot.Phase == LeaguePhase.ChampSelect
-                ? "選角只顯示遊戲正常揭露的身分；匿名玩家不做還原。"
-                : "本場即時表現與歷史近期狀態分開呈現；不代表牌位、隱藏分數或勝率。",
-            11,
-            "#91A0B5");
-        footer.Margin = new Thickness(16, 7, 16, 12);
-        footer.TextAlignment = TextAlignment.Center;
-        DockPanel.SetDock(footer, Dock.Bottom);
-        layout.Children.Add(footer);
+        // The rank/history panel is paused pending a decision on where profile data
+        // comes from -- not deleted. BuildHistoryPanel() still constructs it and
+        // UpdateHistoryControls() still keeps it current, so the fetch pipeline in
+        // App.xaml.cs keeps working unchanged; it is simply not mounted into the
+        // visible layout, so re-adding it later is a one-line change.
+        BuildHistoryPanel();
 
-        var history = BuildHistoryPanel();
-        DockPanel.SetDock(history, Dock.Bottom);
-        layout.Children.Add(history);
-
-        var teamsGrid = new Grid { Margin = new Thickness(12, 0, 12, 6) };
+        var teamsGrid = new Grid { Margin = new Thickness(10, 0, 10, 8) };
         teamsGrid.ColumnDefinitions.Add(new ColumnDefinition());
         teamsGrid.ColumnDefinitions.Add(new ColumnDefinition { Width = new GridLength(12) });
         teamsGrid.ColumnDefinitions.Add(new ColumnDefinition());
@@ -402,11 +396,21 @@ public sealed class OverlayWindow : Window
         grid.ColumnDefinitions.Add(new ColumnDefinition());
         grid.ColumnDefinitions.Add(new ColumnDefinition { Width = GridLength.Auto });
 
-        var text = new StackPanel();
-        _headerText = Text(string.Empty, 14.5, "#F5F7FB", FontWeights.SemiBold);
-        _summaryText = Text(string.Empty, 12, "#A6B3C7");
-        text.Children.Add(_headerText);
-        text.Children.Add(_summaryText);
+        // One line, not two: the phase name and the reading it's showing were on
+        // separate rows, which cost height without adding anything the reader needed
+        // both parts of at a glance. Two Run weights keep the phase name legible
+        // without a second line.
+        _headerRun = new Run(string.Empty) { Foreground = Brush("#F5F7FB"), FontWeight = FontWeights.SemiBold };
+        _summaryRun = new Run(string.Empty) { Foreground = Brush("#8F9DB2") };
+        var text = new TextBlock
+        {
+            FontSize = 13,
+            VerticalAlignment = VerticalAlignment.Center,
+            TextTrimming = TextTrimming.CharacterEllipsis
+        };
+        text.Inlines.Add(_headerRun);
+        text.Inlines.Add(new Run("  ·  ") { Foreground = Brush("#5B6879") });
+        text.Inlines.Add(_summaryRun);
         grid.Children.Add(text);
 
         var buttons = new StackPanel { Orientation = Orientation.Horizontal };
@@ -469,6 +473,7 @@ public sealed class OverlayWindow : Window
         Grid.SetColumn(_opGgButton, 1);
         grid.Children.Add(_opGgButton);
         panel.Child = grid;
+        _historyPanel = panel;
         return panel;
     }
 
@@ -477,11 +482,11 @@ public sealed class OverlayWindow : Window
         var root = new Border
         {
             Background = new SolidColorBrush(Color.FromArgb(80, 38, 48, 67)),
-            CornerRadius = new CornerRadius(10),
-            Padding = new Thickness(10)
+            CornerRadius = new CornerRadius(9),
+            Padding = new Thickness(7)
         };
         var stack = new StackPanel();
-        var heading = new Grid { Margin = new Thickness(2, 0, 2, 8) };
+        var heading = new Grid { Margin = new Thickness(3, 1, 3, 6) };
         heading.ColumnDefinitions.Add(new ColumnDefinition());
         heading.ColumnDefinitions.Add(new ColumnDefinition { Width = GridLength.Auto });
         var name = Text(string.Empty, 14.5, "#74B7FF", FontWeights.SemiBold);
@@ -505,43 +510,38 @@ public sealed class OverlayWindow : Window
 
     private PlayerRowView CreatePlayerRow()
     {
+        // One line per player. The portrait already identifies who this is, the score's
+        // colour already says how the number reads, and confidence is the same for every
+        // row, so the name, the label and the per-row confidence were all repeating
+        // what the reader could already see. They move to the tooltip and the header.
         var root = new Border
         {
-            Height = 56,
-            Margin = new Thickness(0, 0, 0, 4),
-            Padding = new Thickness(6, 4, 6, 4),
+            Height = 34,
+            Margin = new Thickness(0, 0, 0, 3),
+            Padding = new Thickness(5, 0, 7, 0),
             Background = new SolidColorBrush(Color.FromArgb(92, 22, 29, 42)),
-            CornerRadius = new CornerRadius(8)
+            CornerRadius = new CornerRadius(6)
         };
         var grid = new Grid();
-        grid.ColumnDefinitions.Add(new ColumnDefinition { Width = new GridLength(40) });
+        grid.ColumnDefinitions.Add(new ColumnDefinition { Width = new GridLength(34) });
         grid.ColumnDefinitions.Add(new ColumnDefinition());
-        grid.ColumnDefinitions.Add(new ColumnDefinition { Width = new GridLength(86) });
-        var avatar = CreateAvatar(34);
+        grid.ColumnDefinitions.Add(new ColumnDefinition { Width = new GridLength(42) });
+        grid.ColumnDefinitions.Add(new ColumnDefinition { Width = new GridLength(46) });
+        var avatar = CreateAvatar(26);
         grid.Children.Add(avatar.Root);
-        var identity = new StackPanel { VerticalAlignment = VerticalAlignment.Center };
-        var champion = Text(string.Empty, 13.5, "#F4F7FC", FontWeights.SemiBold);
-        var playerName = Text(string.Empty, 11, "#A6B3C7");
-        identity.Children.Add(champion);
-        identity.Children.Add(playerName);
-        Grid.SetColumn(identity, 1);
-        grid.Children.Add(identity);
-        var performance = new StackPanel
-        {
-            VerticalAlignment = VerticalAlignment.Center,
-            HorizontalAlignment = HorizontalAlignment.Right
-        };
-        var score = Text(string.Empty, 15, "#E7EDF7", FontWeights.Bold, HorizontalAlignment.Right);
-        var detail = Text(string.Empty, 10.5, "#8F9DB2", alignment: HorizontalAlignment.Right);
+        var champion = Text(string.Empty, 13, "#EEF3FA", FontWeights.SemiBold);
+        champion.Margin = new Thickness(2, 0, 6, 0);
+        Grid.SetColumn(champion, 1);
+        grid.Children.Add(champion);
         // Champ select shows this cell's pick number; a live game shows carried item value.
-        var meta = Text(string.Empty, 10.5, "#7F8FA6", FontWeights.SemiBold, HorizontalAlignment.Right);
-        performance.Children.Add(score);
-        performance.Children.Add(detail);
-        performance.Children.Add(meta);
-        Grid.SetColumn(performance, 2);
-        grid.Children.Add(performance);
+        var meta = Text(string.Empty, 11, "#8B99AD", alignment: HorizontalAlignment.Right);
+        Grid.SetColumn(meta, 2);
+        grid.Children.Add(meta);
+        var score = Text(string.Empty, 17, "#E7EDF7", FontWeights.Bold, HorizontalAlignment.Right);
+        Grid.SetColumn(score, 3);
+        grid.Children.Add(score);
         root.Child = grid;
-        return new PlayerRowView(root, avatar, champion, playerName, score, detail, meta);
+        return new PlayerRowView(root, avatar, champion, score, meta);
     }
 
     private static StackPanel CompactTeam(
@@ -578,14 +578,14 @@ public sealed class OverlayWindow : Window
 
     private void UpdateVisibleControls()
     {
-        if (_headerText is not null)
+        if (_headerRun is not null)
         {
-            _headerText.Text = _snapshot.Header;
+            _headerRun.Text = _snapshot.Header;
         }
 
-        if (_summaryText is not null)
+        if (_summaryRun is not null)
         {
-            _summaryText.Text = _snapshot.Summary;
+            _summaryRun.Text = _snapshot.Summary;
         }
 
         if (_dot is not null)
@@ -606,16 +606,16 @@ public sealed class OverlayWindow : Window
 
     private void UpdateVisibleControls(OverlaySnapshotDiff diff)
     {
-        if (_headerText is not null &&
+        if (_headerRun is not null &&
             (diff.Fields & OverlaySnapshotFields.Header) != 0)
         {
-            _headerText.Text = _snapshot.Header;
+            _headerRun.Text = _snapshot.Header;
         }
 
-        if (_summaryText is not null &&
+        if (_summaryRun is not null &&
             (diff.Fields & OverlaySnapshotFields.Summary) != 0)
         {
-            _summaryText.Text = _snapshot.Summary;
+            _summaryRun.Text = _snapshot.Summary;
         }
 
         if (_dot is not null &&
@@ -677,7 +677,10 @@ public sealed class OverlayWindow : Window
         {
             var view = _teamViews[index];
             var team = teams.ElementAtOrDefault(index);
-            view.Root.Visibility = team is null ? Visibility.Hidden : Visibility.Visible;
+            // Collapsed, not Hidden: Expanded now sizes to content, so a team card that
+            // reserves space while invisible (Hidden) would hold the window open at its
+            // tallest state -- most visibly during EndOfGame, when both teams are gone.
+            view.Root.Visibility = team is null ? Visibility.Collapsed : Visibility.Visible;
             if (team is null)
             {
                 continue;
@@ -731,7 +734,8 @@ public sealed class OverlayWindow : Window
         OverlayTeam? team,
         OverlayTeamDiff? diff = null)
     {
-        view.Root.Visibility = team is null ? Visibility.Hidden : Visibility.Visible;
+        // Collapsed, not Hidden: see UpdateExpanded's full-refresh branch above.
+        view.Root.Visibility = team is null ? Visibility.Collapsed : Visibility.Visible;
         if (team is null)
         {
             return;
@@ -806,13 +810,18 @@ public sealed class OverlayWindow : Window
 
         UpdateAvatar(view.Avatar, player);
         view.Champion.Text = player.ChampionName;
-        view.Player.Text = player.DisplayName;
-        view.Score.Text = player.PerformanceScore.HasValue ? $"{player.PerformanceScore:0.0}" : "—";
+        view.Score.Text = player.PerformanceScore.HasValue ? $"{player.PerformanceScore:0}" : "—";
         view.Score.Foreground = Brush(ScoreColor(player.PerformanceScore));
-        view.Detail.Text = player.PerformanceLabel is null
+        UpdatePlayerMeta(view, player);
+        UpdateRowTooltip(view, player);
+    }
+
+    private static void UpdateRowTooltip(PlayerRowView view, OverlayPlayer player)
+    {
+        var reading = player.PerformanceLabel is null
             ? player.IsAnonymous ? "匿名" : "尚未開始"
             : $"{player.PerformanceLabel} · {ConfidenceText(player.Confidence)}";
-        UpdatePlayerMeta(view, player);
+        view.Root.ToolTip = $"{player.DisplayName}\n{player.ChampionName} · {reading}";
     }
 
     /// <summary>
@@ -825,11 +834,11 @@ public sealed class OverlayWindow : Window
         string text;
         if (player.PickOrder is { } pickOrder)
         {
-            text = $"第 {pickOrder} 選";
+            text = $"#{pickOrder}";
         }
         else if (player.ItemGold is { } itemGold && itemGold > 0)
         {
-            text = $"裝備 {itemGold / 1000d:0.0}k";
+            text = $"{itemGold / 1000d:0.0}k";
         }
         else
         {
@@ -857,29 +866,24 @@ public sealed class OverlayWindow : Window
             view.Champion.Text = player.ChampionName;
         }
 
-        if ((fields & OverlayPlayerFields.DisplayName) != 0)
-        {
-            view.Player.Text = player.DisplayName;
-        }
-
         if ((fields & OverlayPlayerFields.PerformanceScore) != 0)
         {
-            view.Score.Text = player.PerformanceScore.HasValue ? $"{player.PerformanceScore:0.0}" : "—";
+            view.Score.Text = player.PerformanceScore.HasValue ? $"{player.PerformanceScore:0}" : "—";
             view.Score.Foreground = Brush(ScoreColor(player.PerformanceScore));
-        }
-
-        if ((fields & (OverlayPlayerFields.PerformanceLabel |
-                       OverlayPlayerFields.Confidence |
-                       OverlayPlayerFields.IsAnonymous)) != 0)
-        {
-            view.Detail.Text = player.PerformanceLabel is null
-                ? player.IsAnonymous ? "匿名" : "尚未開始"
-                : $"{player.PerformanceLabel} · {ConfidenceText(player.Confidence)}";
         }
 
         if ((fields & (OverlayPlayerFields.PickOrder | OverlayPlayerFields.ItemGold)) != 0)
         {
             UpdatePlayerMeta(view, player);
+        }
+
+        if ((fields & (OverlayPlayerFields.DisplayName |
+                       OverlayPlayerFields.ChampionName |
+                       OverlayPlayerFields.PerformanceLabel |
+                       OverlayPlayerFields.Confidence |
+                       OverlayPlayerFields.IsAnonymous)) != 0)
+        {
+            UpdateRowTooltip(view, player);
         }
     }
 
@@ -990,19 +994,21 @@ public sealed class OverlayWindow : Window
                 $"激進 {StyleText(profile.PlayStyle.Aggression.Band)}／生存 {StyleText(profile.PlayStyle.Survival.Band)}／" +
                 $"團隊 {StyleText(profile.PlayStyle.TeamParticipation.Band)}／發育 {StyleText(profile.PlayStyle.Farming.Band)}／" +
                 $"英雄池 {StyleText(profile.PlayStyle.ChampionPool.Band)}";
-            _historyMeta.Visibility = Visibility.Visible;
-            _historyDetails.Visibility = Visibility.Visible;
+            if (_historyPanel is not null)
+            {
+                _historyPanel.Visibility = Visibility.Visible;
+            }
+
             return;
         }
 
-        // With no profile, the source/sample and disclaimer lines carry nothing a reader
-        // acts on, and they cost two lines of Expanded height on every frame. The state
-        // itself still says unavailable, which is what the release criteria require.
-        var availability = entry?.Availability ?? _historicalProfiles?.Availability ??
-            HistoricalProfileAvailability.PolicyDisabled;
-        _historyStatus.Text = $"{AvailabilityText(availability)}；不影響上方本場表現，也不會用假資料冒充真人。";
-        _historyMeta.Visibility = Visibility.Collapsed;
-        _historyDetails.Visibility = Visibility.Collapsed;
+        // No profile means the whole block has nothing to say, and the release criteria
+        // let the feature be hidden outright rather than shown as unavailable. Hiding it
+        // beats spending a permanent band on a panel that sits over a game.
+        if (_historyPanel is not null)
+        {
+            _historyPanel.Visibility = Visibility.Collapsed;
+        }
     }
 
     private HistoricalProfileEntry? FindActiveHistoryEntry()
@@ -1493,9 +1499,7 @@ public sealed class OverlayWindow : Window
         Border Root,
         AvatarView Avatar,
         TextBlock Champion,
-        TextBlock Player,
         TextBlock Score,
-        TextBlock Detail,
         TextBlock Meta);
 
     private sealed record TeamView(
