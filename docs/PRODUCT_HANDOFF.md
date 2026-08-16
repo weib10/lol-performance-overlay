@@ -410,7 +410,7 @@ P0 的架構性問題（長生命週期 UI、pointer state machine、snapshot �
 - `trustedActor` 設定為 `weib10`，但 repository 上既有的 Issue 全是另一位協作者開的，代表 worker 實際上處於「作者不符、無法選中任何工作」的狀態，即使啟用也動不了。
 - Sandcastle 自己的約 2,800 行 TypeScript 測試沒有接進任何 CI，implement/review/gate 這條鏈完全沒被驗證過。
 
-決定完整移除而非只停用：`delivery.enabled`／`merge.enabled` 當時都是 `false`（fail-closed），但留著一套完整、任何 write collaborator 都能重新啟用的自動化，風險大於保留它的價值。移除範圍：`.sandcastle/` 全部、`package.json`／`package-lock.json`／`.nvmrc`（只為它存在的 Node toolchain）、`docs/SANDCASTLE_SETUP_RESEARCH.md`，並回收當初為容納它而放寬的 release scan 規則（`developerPathRegexes` 曾經排除 `/home/agent/`，已還原成嚴格版本）。`agent/linux-usability-release` 與 PR 來源 branch `sandcastle/issue-worker-deployment` 已確認所有 commit 都是 `main` 的祖先後刪除；`main` 現在是唯一分支。程式碼仍在 git 歷史的 `c52fc15`，需要時可 `git revert` 找回，但不建議重新啟用。
+決定完整移除而非只停用：`delivery.enabled`／`merge.enabled` 當時都是 `false`（fail-closed），但留著一套完整、任何 write collaborator 都能重新啟用的自動化，風險大於保留它的價值。移除範圍：`.sandcastle/` 全部、`package.json`／`package-lock.json`／`.nvmrc`（只為它存在的 Node toolchain）、`docs/SANDCASTLE_SETUP_RESEARCH.md`，並回收當初為容納它而放寬的 release scan 規則（`developerPathRegexes` 曾經對容器的 home 目錄開特例，已還原成嚴格版本，不再排除任何路徑）。`agent/linux-usability-release` 與 PR 來源 branch `sandcastle/issue-worker-deployment` 已確認所有 commit 都是 `main` 的祖先後刪除；`main` 現在是唯一分支。程式碼仍在 git 歷史的 `c52fc15`，需要時可 `git revert` 找回，但不建議重新啟用。
 
 ### 真機開發環境：SDK 其實已經在
 
