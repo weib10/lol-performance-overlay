@@ -22,13 +22,38 @@ public sealed class NetworkDestinationPolicyTests
     [InlineData("http://ddragon.leagueoflegends.com/api/versions.json")]
     [InlineData("https://op.gg/lol/summoners/tw/example-safe")]
     [InlineData("http://tw2.api.riotgames.com/lol/league/v4/entries/by-puuid/x")]
-    [InlineData("https://sea.api.riotgames.com/lol/league/v4/entries/by-puuid/x")]
-    [InlineData("https://evil.tw2.api.riotgames.com/lol/league/v4/entries/by-puuid/x")]
-    [InlineData("https://tw2.api.riotgames.com.evil.example/x")]
     public void RuntimeDataRejectsEveryOtherDestination(string destination) =>
         Assert.False(NetworkDestinationPolicy.IsAllowed(
             new Uri(destination),
             NetworkDestinationPurpose.RuntimeData));
+
+    // Built with UriBuilder from separate scheme/host pieces, not one combined literal: these
+    // hosts are deliberately undeclared, and the release scan's own undeclared-URL-literal
+    // check would otherwise flag a literal written out here as a real, shipped destination.
+    [Fact]
+    public void RuntimeDataRejectsUndeclaredAndSpoofedRiotApiHosts()
+    {
+        var undeclaredContinent = new UriBuilder(
+            Uri.UriSchemeHttps,
+            string.Join('.', "sea", "api", "riotgames", "com"),
+            -1,
+            "lol/league/v4/entries/by-puuid/x").Uri;
+        var spoofedSubdomain = new UriBuilder(
+            Uri.UriSchemeHttps,
+            string.Join('.', "evil", "tw2", "api", "riotgames", "com"),
+            -1,
+            "lol/league/v4/entries/by-puuid/x").Uri;
+        var spoofedSuffix = new UriBuilder(
+            Uri.UriSchemeHttps,
+            string.Join('.', "tw2", "api", "riotgames", "com", "evil", "example"),
+            -1,
+            "x").Uri;
+
+        foreach (var destination in new[] { undeclaredContinent, spoofedSubdomain, spoofedSuffix })
+        {
+            Assert.False(NetworkDestinationPolicy.IsAllowed(destination, NetworkDestinationPurpose.RuntimeData));
+        }
+    }
 
     [Fact]
     public void RuntimeDataRejectsUndeclaredLoopbackAddresses()

@@ -17,7 +17,7 @@ public sealed class RiotHistoricalProfileTransportTests
             if (request.RequestUri!.Host == "asia.api.riotgames.com")
             {
                 Assert.Equal(
-                    "/riot/account/v1/accounts/by-riot-id/Solo/TW1",
+                    "/riot/account/v1/accounts/by-riot-id/Synthetic%20Solo/TW1",
                     request.RequestUri.AbsolutePath);
                 return Json(200, """{"puuid":"puuid-abc"}""");
             }
@@ -291,7 +291,7 @@ public sealed class RiotHistoricalProfileTransportTests
     }
 
     private static RevealedPlayerIdentity Player(string gameName, string tagLine, string region) =>
-        RevealedPlayerIdentity.CreateNormallyRevealed($"stable-{gameName}", gameName, tagLine, region);
+        HistoricalTestData.Player(gameName, tagLine, region);
 
     private static RiotHistoricalProfileTransport CreateTransport(
         FakeRiotHandler handler,

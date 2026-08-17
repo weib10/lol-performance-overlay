@@ -11,6 +11,17 @@ internal static class HistoricalTestData
             $"FAKE{number:D2}",
             "tw2");
 
+    // The release gate only allows direct RevealedPlayerIdentity construction inside this
+    // audited file (eng/package-config.json's syntheticIdentityFactoryFiles). Tests that need
+    // a specific game name, tag line, or region -- e.g. to exercise region routing -- call this
+    // instead of constructing directly themselves.
+    public static RevealedPlayerIdentity Player(string gameName, string tagLine, string region) =>
+        RevealedPlayerIdentity.CreateNormallyRevealed(
+            $"synthetic-stable-{gameName}-{tagLine}",
+            $"Synthetic {gameName}",
+            tagLine,
+            region);
+
     public static HistoricalProfile Profile(
         RevealedPlayerIdentity player,
         HistoricalQueue queue,
