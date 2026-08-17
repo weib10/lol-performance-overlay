@@ -1,5 +1,7 @@
 using System.Reflection;
 using System.IO;
+using System.Windows.Controls;
+using System.Windows.Documents;
 using LolPerformanceOverlay.Core;
 using LolPerformanceOverlay.Services;
 using LolPerformanceOverlay.UI;
@@ -78,6 +80,73 @@ public sealed class WindowsAdapterTests
         Assert.Contains(nameof(OverlayWindow.ApplySnapshot), methods);
         Assert.Contains(nameof(OverlayWindow.ApplyHistoricalProfiles), methods);
         Assert.Contains(nameof(OverlayWindow.ClearHistoricalProfiles), methods);
+    }
+
+    [Fact]
+    public void HitTestWalkSkipsNonVisualInlineTextWithoutCrashing()
+    {
+        // WM_NCHITTEST fires on every mouse move; InputHitTest over rendered label
+        // text can return a Run, which is a ContentElement, not a Visual/Visual3D.
+        // WPF FrameworkElement construction requires an STA thread.
+        Exception? exception = null;
+        bool? result = null;
+
+        var thread = new Thread(() =>
+        {
+            try
+            {
+                var method = typeof(OverlayWindow).GetMethod(
+                    "IsInteractiveControl",
+                    BindingFlags.NonPublic | BindingFlags.Static)!;
+                var run = new Run("Player");
+                _ = new TextBlock { Inlines = { run } };
+                result = (bool)method.Invoke(null, [run])!;
+            }
+            catch (Exception ex)
+            {
+                exception = ex;
+            }
+        });
+        thread.SetApartmentState(ApartmentState.STA);
+        thread.Start();
+        thread.Join();
+
+        Assert.Null(exception);
+        Assert.False(result);
+    }
+
+    [Fact]
+    public void HitTestWalkStillFindsInteractiveTagAboveInlineText()
+    {
+        // The logical-tree detour for non-Visual nodes (Run) must rejoin the
+        // visual tree, or a Tag="Interactive" ancestor above a label stops
+        // being detected once the hit lands on its text.
+        Exception? exception = null;
+        bool? result = null;
+
+        var thread = new Thread(() =>
+        {
+            try
+            {
+                var method = typeof(OverlayWindow).GetMethod(
+                    "IsInteractiveControl",
+                    BindingFlags.NonPublic | BindingFlags.Static)!;
+                var run = new Run("Close");
+                var label = new TextBlock { Inlines = { run } };
+                _ = new Border { Tag = "Interactive", Child = label };
+                result = (bool)method.Invoke(null, [run])!;
+            }
+            catch (Exception ex)
+            {
+                exception = ex;
+            }
+        });
+        thread.SetApartmentState(ApartmentState.STA);
+        thread.Start();
+        thread.Join();
+
+        Assert.Null(exception);
+        Assert.True(result);
     }
 
     [Fact]

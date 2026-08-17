@@ -23,7 +23,26 @@
     "runtimeHosts": [
       "127.0.0.1",
       "localhost",
-      "ddragon.leagueoflegends.com"
+      "ddragon.leagueoflegends.com",
+      "americas.api.riotgames.com",
+      "asia.api.riotgames.com",
+      "europe.api.riotgames.com",
+      "br1.api.riotgames.com",
+      "eun1.api.riotgames.com",
+      "euw1.api.riotgames.com",
+      "jp1.api.riotgames.com",
+      "kr.api.riotgames.com",
+      "la1.api.riotgames.com",
+      "la2.api.riotgames.com",
+      "na1.api.riotgames.com",
+      "oc1.api.riotgames.com",
+      "ph2.api.riotgames.com",
+      "ru.api.riotgames.com",
+      "sg2.api.riotgames.com",
+      "th2.api.riotgames.com",
+      "tr1.api.riotgames.com",
+      "tw2.api.riotgames.com",
+      "vn2.api.riotgames.com"
     ],
     "userInitiatedBrowserHosts": [
       "op.gg"

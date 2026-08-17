@@ -9,7 +9,10 @@ public sealed class NetworkDestinationPolicyTests
     [InlineData("https://ddragon.leagueoflegends.com/api/versions.json")]
     [InlineData("https://127.0.0.1:2999/liveclientdata/playerlist")]
     [InlineData("http://localhost:12345/lol-gameflow/v1/gameflow-phase")]
-    public void RuntimeDataAllowsOnlyDataDragonAndLoopback(string destination) =>
+    [InlineData("https://tw2.api.riotgames.com/lol/league/v4/entries/by-puuid/x")]
+    [InlineData("https://asia.api.riotgames.com/riot/account/v1/accounts/by-riot-id/a/b")]
+    [InlineData("https://na1.api.riotgames.com/lol/league/v4/entries/by-puuid/x")]
+    public void RuntimeDataAllowsDataDragonLoopbackAndKnownRiotApiHosts(string destination) =>
         Assert.True(NetworkDestinationPolicy.IsAllowed(
             new Uri(destination),
             NetworkDestinationPurpose.RuntimeData));
@@ -18,6 +21,10 @@ public sealed class NetworkDestinationPolicyTests
     [InlineData("wss://ddragon.leagueoflegends.com/socket")]
     [InlineData("http://ddragon.leagueoflegends.com/api/versions.json")]
     [InlineData("https://op.gg/lol/summoners/tw/example-safe")]
+    [InlineData("http://tw2.api.riotgames.com/lol/league/v4/entries/by-puuid/x")]
+    [InlineData("https://sea.api.riotgames.com/lol/league/v4/entries/by-puuid/x")]
+    [InlineData("https://evil.tw2.api.riotgames.com/lol/league/v4/entries/by-puuid/x")]
+    [InlineData("https://tw2.api.riotgames.com.evil.example/x")]
     public void RuntimeDataRejectsEveryOtherDestination(string destination) =>
         Assert.False(NetworkDestinationPolicy.IsAllowed(
             new Uri(destination),

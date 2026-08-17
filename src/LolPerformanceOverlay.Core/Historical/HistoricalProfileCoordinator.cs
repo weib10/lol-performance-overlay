@@ -239,6 +239,10 @@ public sealed class HistoricalProfileCoordinator : IHistoricalProfileProvider, I
         {
             request.Cancel();
         }
+
+        // The coordinator is the sole owner of the transport it was constructed with; a live
+        // transport typically holds an HttpClient that needs releasing.
+        (_transport as IDisposable)?.Dispose();
     }
 
     private async Task<HistoricalProfileEntry> GetOneAsync(

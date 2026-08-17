@@ -154,7 +154,7 @@ public sealed class HistoricalModelsTests
     [Fact]
     public async Task ShippingDefaultNeverSelectsSyntheticHistory()
     {
-        var provider = HistoricalProfileProviders.CreateShippingDefault();
+        var provider = HistoricalProfileProviders.CreateShippingDefault(riotApiKey: null);
 
         var result = await provider.GetProfilesAsync(
             [HistoricalTestData.Player(4)],
@@ -164,6 +164,23 @@ public sealed class HistoricalModelsTests
         Assert.IsType<PolicyDisabledHistoricalProfileProvider>(provider);
         Assert.Equal(HistoricalProfileAvailability.PolicyDisabled, result.Availability);
         Assert.All(result.Entries, entry => Assert.Null(entry.Profile));
+    }
+
+    [Theory]
+    [InlineData(null)]
+    [InlineData("")]
+    [InlineData("   ")]
+    public void ShippingDefaultStaysPolicyDisabledForAnyBlankKey(string? blankKey) =>
+        Assert.IsType<PolicyDisabledHistoricalProfileProvider>(
+            HistoricalProfileProviders.CreateShippingDefault(blankKey));
+
+    [Fact]
+    public void ShippingDefaultBuildsALiveCoordinatorOnceAKeyIsConfigured()
+    {
+        using var provider = (HistoricalProfileCoordinator)HistoricalProfileProviders.CreateShippingDefault(
+            "test-configured-key");
+
+        Assert.IsType<HistoricalProfileCoordinator>(provider);
     }
 
     [Fact]

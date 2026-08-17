@@ -11,6 +11,7 @@ public sealed class SettingsWindow : Window
     private readonly CheckBox _positionLocked;
     private readonly Slider _opacity;
     private readonly TextBox _hotkey;
+    private readonly PasswordBox _riotApiKey;
     private readonly TextBlock _validation;
     private readonly AppSettings _working;
 
@@ -19,7 +20,7 @@ public sealed class SettingsWindow : Window
         _working = settings.Clone();
         Title = "LoL 即時表現 Overlay 設定";
         Width = 420;
-        Height = 380;
+        Height = 470;
         // The Overlay is Topmost, so an unowned dialog opens underneath it and its
         // controls cannot be reached. Owning the dialog puts it above its owner, and
         // Topmost keeps it above the game as well.
@@ -74,6 +75,20 @@ public sealed class SettingsWindow : Window
         _validation = Body("格式範例：Ctrl+Shift+O");
         root.Children.Add(_validation);
 
+        var apiKeyHeading = Heading("官方牌位（選用）", 13);
+        apiKeyHeading.Margin = new Thickness(0, 20, 0, 0);
+        root.Children.Add(apiKeyHeading);
+        root.Children.Add(Body(
+            "貼上你自己申請的 Riot Personal API key 才會顯示官方牌位；留空則維持不查詢。" +
+            "只存在這台電腦，不會被打包或上傳，改動要重新啟動才會生效。"));
+        _riotApiKey = new PasswordBox
+        {
+            Password = settings.RiotApiKey,
+            Margin = new Thickness(0, 8, 0, 4),
+            Padding = new Thickness(8, 5, 8, 5)
+        };
+        root.Children.Add(_riotApiKey);
+
         var buttons = new StackPanel
         {
             Orientation = Orientation.Horizontal,
@@ -113,6 +128,7 @@ public sealed class SettingsWindow : Window
         _working.PositionLocked = _positionLocked.IsChecked == true;
         _working.Opacity = _opacity.Value;
         _working.Hotkey = _hotkey.Text.Trim();
+        _working.RiotApiKey = _riotApiKey.Password.Trim();
         DialogResult = true;
     }
 

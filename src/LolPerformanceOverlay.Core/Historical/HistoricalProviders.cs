@@ -288,6 +288,23 @@ public static class HistoricalProfileProviders
     /// The public package remains honest when no approved live backend is configured.
     /// Synthetic data is opt-in and is never selected by shipping composition.
     /// </summary>
-    public static IHistoricalProfileProvider CreateShippingDefault(TimeProvider? timeProvider = null) =>
-        new PolicyDisabledHistoricalProfileProvider(timeProvider);
+    /// <param name="riotApiKey">
+    /// A Riot Personal or Production API key held only in the caller's local settings; null or
+    /// blank keeps the default PolicyDisabled behaviour. This factory never reads a key from an
+    /// environment variable, config file shipped with the product, or any other source -- the
+    /// caller is responsible for keeping it out of anything that gets built or committed.
+    /// </param>
+    public static IHistoricalProfileProvider CreateShippingDefault(
+        string? riotApiKey,
+        TimeProvider? timeProvider = null)
+    {
+        if (string.IsNullOrWhiteSpace(riotApiKey))
+        {
+            return new PolicyDisabledHistoricalProfileProvider(timeProvider);
+        }
+
+        return new HistoricalProfileCoordinator(
+            new RiotHistoricalProfileTransport(riotApiKey.Trim()),
+            timeProvider: timeProvider);
+    }
 }

@@ -8,6 +8,7 @@ using System.Windows.Documents;
 using System.Windows.Input;
 using System.Windows.Interop;
 using System.Windows.Media;
+using System.Windows.Media.Media3D;
 using System.Windows.Shapes;
 using LolPerformanceOverlay.Core;
 using LolPerformanceOverlay.Core.Interaction;
@@ -316,7 +317,7 @@ public sealed class OverlayWindow : Window
                 var column = new StackPanel();
                 column.Children.Add(Text(
                     side == 0 ? "藍方" : "紅方",
-                    11,
+                    12.5,
                     TeamColor(side == 0 ? 100 : 200),
                     FontWeights.SemiBold));
                 var icons = new UniformGrid { Columns = 5, Margin = new Thickness(0, 3, 0, 0) };
@@ -365,12 +366,14 @@ public sealed class OverlayWindow : Window
         DockPanel.SetDock(header, Dock.Top);
         layout.Children.Add(header);
 
-        // The rank/history panel is paused pending a decision on where profile data
-        // comes from -- not deleted. BuildHistoryPanel() still constructs it and
-        // UpdateHistoryControls() still keeps it current, so the application startup
-        // class's fetch pipeline keeps working unchanged; it is simply not mounted
-        // into the visible layout, so re-adding it later is a one-line change.
-        BuildHistoryPanel();
+        // Mounted but collapsed by default: UpdateHistoryControls only sets it Visible once a
+        // profile with real data exists, which only happens when the shipping provider is a
+        // live one (a Riot key is configured). No key -> PolicyDisabled entries -> no Profile
+        // -> stays Collapsed, satisfying the release criteria's "no provider means hidden or
+        // explicitly unavailable, never faked" requirement without a separate on/off switch here.
+        var history = BuildHistoryPanel();
+        DockPanel.SetDock(history, Dock.Bottom);
+        layout.Children.Add(history);
 
         var teamsGrid = new Grid { Margin = new Thickness(10, 0, 10, 8) };
         teamsGrid.ColumnDefinitions.Add(new ColumnDefinition());
@@ -400,16 +403,18 @@ public sealed class OverlayWindow : Window
         // separate rows, which cost height without adding anything the reader needed
         // both parts of at a glance. Two Run weights keep the phase name legible
         // without a second line.
+        // The summary is the reading the player actually came for, so it is not dimmed
+        // below the phase label beside it; only the separator recedes.
         _headerRun = new Run(string.Empty) { Foreground = Brush("#F5F7FB"), FontWeight = FontWeights.SemiBold };
-        _summaryRun = new Run(string.Empty) { Foreground = Brush("#8F9DB2") };
+        _summaryRun = new Run(string.Empty) { Foreground = Brush("#C8D6EA"), FontWeight = FontWeights.Medium };
         var text = new TextBlock
         {
-            FontSize = 13,
+            FontSize = 13.5,
             VerticalAlignment = VerticalAlignment.Center,
             TextTrimming = TextTrimming.CharacterEllipsis
         };
         text.Inlines.Add(_headerRun);
-        text.Inlines.Add(new Run("  ·  ") { Foreground = Brush("#5B6879") });
+        text.Inlines.Add(new Run("  ·  ") { Foreground = Brush("#78889D") });
         text.Inlines.Add(_summaryRun);
         grid.Children.Add(text);
 
@@ -452,10 +457,10 @@ public sealed class OverlayWindow : Window
         grid.ColumnDefinitions.Add(new ColumnDefinition());
         grid.ColumnDefinitions.Add(new ColumnDefinition { Width = GridLength.Auto });
         var text = new StackPanel();
-        text.Children.Add(Text("歷史近期狀態／風格（獨立資訊）", 11.5, "#DDE8F7", FontWeights.SemiBold));
-        _historyStatus = Text(string.Empty, 10.5, "#B7C3D5");
-        _historyMeta = Text(string.Empty, 9.5, "#8798B0");
-        _historyDetails = Text(string.Empty, 9.5, "#8798B0");
+        text.Children.Add(Text("歷史近期狀態／風格（獨立資訊）", 12.5, "#DDE8F7", FontWeights.SemiBold));
+        _historyStatus = Text(string.Empty, 12.5, "#CBD6E7", FontWeights.Medium);
+        _historyMeta = Text(string.Empty, 12, "#B3C0D4");
+        _historyDetails = Text(string.Empty, 12, "#B3C0D4");
         text.Children.Add(_historyStatus);
         text.Children.Add(_historyMeta);
         text.Children.Add(_historyDetails);
@@ -534,7 +539,14 @@ public sealed class OverlayWindow : Window
         Grid.SetColumn(champion, 1);
         grid.Children.Add(champion);
         // Champ select shows this cell's pick number; a live game shows carried item value.
-        var meta = Text(string.Empty, 11, "#8B99AD", alignment: HorizontalAlignment.Right);
+        // Sized and weighted like real data, not a caption: at 11px in mid grey it washed
+        // out against a bright game behind the panel and could not be read at a glance.
+        var meta = Text(
+            string.Empty,
+            13,
+            "#B9C7DB",
+            FontWeights.SemiBold,
+            HorizontalAlignment.Right);
         Grid.SetColumn(meta, 2);
         grid.Children.Add(meta);
         var score = Text(string.Empty, 17, "#E7EDF7", FontWeights.Bold, HorizontalAlignment.Right);
@@ -551,7 +563,7 @@ public sealed class OverlayWindow : Window
     {
         var stack = new StackPanel { HorizontalAlignment = alignment };
         heading = Text(string.Empty, 14.5, "#DCE8F8", FontWeights.SemiBold);
-        detail = Text(string.Empty, 12, "#96A4B8");
+        detail = Text(string.Empty, 13, "#BAC8DC", FontWeights.Medium);
         stack.Children.Add(heading);
         stack.Children.Add(detail);
         return stack;
@@ -1348,7 +1360,7 @@ public sealed class OverlayWindow : Window
                 return true;
             }
 
-            element = VisualTreeHelper.GetParent(element);
+            element = GetTreeParent(element);
         }
 
         return false;
@@ -1363,11 +1375,19 @@ public sealed class OverlayWindow : Window
                 return true;
             }
 
-            element = VisualTreeHelper.GetParent(element);
+            element = GetTreeParent(element);
         }
 
         return false;
     }
+
+    // Hit-testing over rendered label text can return an inline ContentElement
+    // (e.g. Run) that is not a Visual/Visual3D, which VisualTreeHelper rejects.
+    // Walk the logical tree for those nodes to get back to the visual tree.
+    private static DependencyObject? GetTreeParent(DependencyObject element) =>
+        element is Visual or Visual3D
+            ? VisualTreeHelper.GetParent(element)
+            : LogicalTreeHelper.GetParent(element);
 
     private static bool HasOwnTag(DependencyObject element, string tag) =>
         element is FrameworkElement framework && Equals(framework.Tag, tag);

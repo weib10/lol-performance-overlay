@@ -16,6 +16,16 @@ public static class NetworkDestinationPolicy
     private const string OpGgHost = "op.gg";
     private const string LoopbackIpv4Host = "127.0.0.1";
     private const string LoopbackDnsHost = "localhost";
+    private const string RiotApiHostSuffix = ".api.riotgames.com";
+
+    // Riot's own official API gateway hosts, derived from the same platform/continent codes
+    // PlatformRegionMapper already knows -- not a wildcard on the suffix, so a host that merely
+    // resembles "*.api.riotgames.com" but isn't one of these exact, known routing values is
+    // still rejected.
+    private static readonly IReadOnlySet<string> RiotApiHosts = PlatformRegionMapper.KnownPlatformIds
+        .Concat(["americas", "asia", "europe"])
+        .Select(code => code + RiotApiHostSuffix)
+        .ToHashSet(StringComparer.OrdinalIgnoreCase);
 
     public static bool IsAllowed(Uri destination, NetworkDestinationPurpose purpose)
     {
@@ -34,7 +44,8 @@ public static class NetworkDestinationPolicy
                  (destination.Scheme == Uri.UriSchemeHttp ||
                   destination.Scheme == Uri.UriSchemeHttps)) ||
                 (destination.Scheme == Uri.UriSchemeHttps &&
-                 string.Equals(destination.IdnHost, DataDragonHost, StringComparison.OrdinalIgnoreCase)),
+                 (string.Equals(destination.IdnHost, DataDragonHost, StringComparison.OrdinalIgnoreCase) ||
+                  RiotApiHosts.Contains(destination.IdnHost))),
             NetworkDestinationPurpose.UserInitiatedBrowser =>
                 destination.Scheme == Uri.UriSchemeHttps &&
                 string.Equals(destination.IdnHost, OpGgHost, StringComparison.OrdinalIgnoreCase),

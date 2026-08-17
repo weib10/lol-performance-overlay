@@ -14,6 +14,12 @@ public sealed class AppSettings
     public bool PositionLocked { get; set; }
     public string Hotkey { get; set; } = "Ctrl+Shift+O";
 
+    // Held only in this file (%LOCALAPPDATA%\LolPerformanceOverlay\settings.json), which is
+    // never committed and never bundled into a published build. A key entered here takes
+    // effect on the next launch, not live -- the historical provider is constructed once at
+    // startup, same as the session source and scorer.
+    public string RiotApiKey { get; set; } = string.Empty;
+
     public AppSettings Clone() =>
         new()
         {
@@ -22,7 +28,8 @@ public sealed class AppSettings
             Opacity = Opacity,
             StartWithWindows = StartWithWindows,
             PositionLocked = PositionLocked,
-            Hotkey = Hotkey
+            Hotkey = Hotkey,
+            RiotApiKey = RiotApiKey
         };
 }
 
@@ -32,7 +39,8 @@ internal readonly record struct AppSettingsSnapshot(
     double Opacity,
     bool StartWithWindows,
     bool PositionLocked,
-    string Hotkey)
+    string Hotkey,
+    string RiotApiKey)
 {
     public static AppSettingsSnapshot Capture(AppSettings settings)
     {
@@ -43,7 +51,8 @@ internal readonly record struct AppSettingsSnapshot(
             settings.Opacity,
             settings.StartWithWindows,
             settings.PositionLocked,
-            settings.Hotkey);
+            settings.Hotkey,
+            settings.RiotApiKey);
     }
 
     public AppSettings ToSettings() => new()
@@ -53,7 +62,8 @@ internal readonly record struct AppSettingsSnapshot(
         Opacity = Opacity,
         StartWithWindows = StartWithWindows,
         PositionLocked = PositionLocked,
-        Hotkey = Hotkey
+        Hotkey = Hotkey,
+        RiotApiKey = RiotApiKey
     };
 }
 
@@ -117,6 +127,7 @@ public sealed class SettingsStore
             settings.Hotkey = string.IsNullOrWhiteSpace(settings.Hotkey)
                 ? "Ctrl+Shift+O"
                 : settings.Hotkey.Trim();
+            settings.RiotApiKey = settings.RiotApiKey?.Trim() ?? string.Empty;
             return settings;
         }
         catch

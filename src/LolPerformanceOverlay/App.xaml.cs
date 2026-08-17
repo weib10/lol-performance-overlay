@@ -146,7 +146,7 @@ public partial class App : System.Windows.Application
         _scorer = new PerformanceScorer();
         _historicalProvider = _isDemo
             ? new SyntheticHistoricalProfileProvider()
-            : HistoricalProfileProviders.CreateShippingDefault();
+            : HistoricalProfileProviders.CreateShippingDefault(_settings.RiotApiKey);
         _sessionSource = _isDemo
             ? new ReplaySessionSource(_staticData)
             : new LeagueSessionSource(_staticData);
