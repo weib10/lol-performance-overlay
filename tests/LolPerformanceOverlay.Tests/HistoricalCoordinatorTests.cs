@@ -309,6 +309,33 @@ public sealed class HistoricalCoordinatorTests
     }
 
     [Fact]
+    public async Task NoRankedLadderReasonSurvivesTheCoordinatorUnchanged()
+    {
+        // Pins the whole chain, not just the transport: IsValid must not reject an
+        // Unavailable/no-profile result (it does not -- Unavailable is not one of the three
+        // availabilities IsValid requires a profile for), and nothing between the transport
+        // and the entry may fall back to substituting ProviderUnavailable for it the way the
+        // stale-not-allowed branch does for a genuinely unset reason. If this regresses, a
+        // real ARAM game goes back to telling players the data source is broken.
+        var clock = new HistoricalManualTimeProvider(Now);
+        var transport = new RecordingHistoricalTransport((_, _, _) =>
+            Task.FromResult(HistoricalProfileTransportResult.Failure(
+                HistoricalProfileAvailability.Unavailable,
+                HistoricalFailureReason.NoRankedLadder)));
+        using var coordinator = CreateCoordinator(transport, clock);
+
+        var result = await coordinator.GetProfilesAsync(
+            [HistoricalTestData.Player(63)],
+            new HistoricalProfileQuery(HistoricalQueue.Aram),
+            CancellationToken.None);
+
+        var entry = Assert.Single(result.Entries);
+        Assert.Equal(HistoricalProfileAvailability.Unavailable, entry.Availability);
+        Assert.Equal(HistoricalFailureReason.NoRankedLadder, entry.FailureReason);
+        Assert.Null(entry.Profile);
+    }
+
+    [Fact]
     public async Task ProfileOlderThanStaleLifetimeIsRejectedAndNotCached()
     {
         var clock = new HistoricalManualTimeProvider(Now);

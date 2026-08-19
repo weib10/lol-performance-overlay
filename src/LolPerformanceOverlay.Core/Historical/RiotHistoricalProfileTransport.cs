@@ -52,10 +52,15 @@ public sealed class RiotHistoricalProfileTransport : IHistoricalProfileTransport
         if (queueType is null)
         {
             // No ranked ladder exists for this queue (e.g. ARAM). This is not "the record
-            // was not found" -- the concept does not apply, so no HTTP call is made at all.
+            // was not found", and it is not "the provider is broken" either -- the ladder
+            // concept simply does not apply here, so no HTTP call is made at all. Availability
+            // stays Unavailable (that is still the honest availability -- there is truly
+            // nothing to serve), but the reason says exactly why, so the presentation layer
+            // (OfficialRankAttachment) does not have to guess or, worse, tell the player the
+            // data source is broken when nothing is broken.
             return HistoricalProfileTransportResult.Failure(
                 HistoricalProfileAvailability.Unavailable,
-                HistoricalFailureReason.ProviderUnavailable);
+                HistoricalFailureReason.NoRankedLadder);
         }
 
         var accountRoute = PlatformRegionMapper.TryMapAccountRegionalRoute(player.Region);

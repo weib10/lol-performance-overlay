@@ -227,6 +227,10 @@ public sealed class RiotHistoricalProfileTransportTests
             CancellationToken.None);
 
         Assert.Equal(HistoricalProfileAvailability.Unavailable, result.Availability);
+        // Distinct from ProviderUnavailable on purpose -- a queue with no ranked ladder is a
+        // different fact from a broken source, and OfficialRankAttachment depends on this
+        // reason (not availability alone) to avoid telling the player the source is down.
+        Assert.Equal(HistoricalFailureReason.NoRankedLadder, result.FailureReason);
         Assert.Equal(0, handler.CallCount);
     }
 

@@ -134,7 +134,13 @@ public enum HistoricalFailureReason
     RequestThrottled,
     UpstreamFailure,
     RequestTimedOut,
-    InvalidResponse
+    InvalidResponse,
+    // The queue has no ranked ladder at all (e.g. ARAM) -- distinct from ProviderUnavailable
+    // on purpose. "No ladder exists for this queue" and "the source is broken right now" are
+    // different facts with different honest wording; collapsing them into one reason is what
+    // made RiotHistoricalProfileTransport's ARAM short-circuit lie to the presentation layer
+    // (see OfficialRankAttachment). See RiotHistoricalProfileTransport.FetchAsync.
+    NoRankedLadder
 }
 
 public enum HistoricalConfidence

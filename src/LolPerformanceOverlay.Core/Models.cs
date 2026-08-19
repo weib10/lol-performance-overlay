@@ -57,13 +57,27 @@ public sealed record RawItemState(int ItemId, int Count, int GoldValue);
 /// <summary>
 /// Already-formatted official rank display data for one row of the Expanded panel --
 /// following the same convention as <see cref="OverlayPlayer.PerformanceLabel"/>, the
-/// formatting (tier letter, division digit) happens once in Core, never in the WPF adapter.
-/// Only the short code exists today; it is a positional record with room for trailing
-/// optional parameters so a later status-wording field and a later tooltip/source/fetched-at
-/// group can be added without reshaping callers, the same way <see cref="OverlayPlayer"/>
-/// itself grew <c>PickOrder</c> and <c>ItemGold</c>.
+/// formatting (tier letter, division digit, and now plain-language status wording) happens
+/// once in Core, never in the WPF adapter.
+/// <see cref="ShortCode"/> is deliberately terse -- the rank column is only 25px wide (see
+/// OverlayWindow.CreatePlayerRow) -- and collapses many different states into a handful of
+/// visual ones so ten rows of a distinct, obscure marker never reads as the app being broken:
+/// a real rank code ("D4", "GM"), "未" for a player unranked in a queue that has a ladder,
+/// a neutral "—" for every lookup failure, or an empty string for a queue with no ranked
+/// ladder at all (e.g. ARAM) -- OverlayWindow.UpdatePlayerRank already collapses the cell
+/// whenever the text is empty, and here that is the point: the concept has no value to show,
+/// on any player, in every game played in that queue. A trailing "*" on a non-empty code means
+/// the data is stale: a second, non-colour signal, because AGENTS.md forbids marking state by
+/// colour alone.
+/// <see cref="StatusText"/> is the fuller, friend-facing sentence behind that marker and stays
+/// fully distinct per state even where ShortCode does not -- empty only for a fresh resolved
+/// rank, which needs no further explanation. It exists today so issue #9's tooltip has
+/// something to read; this ticket does not wire it into any visible control.
+/// It is a positional record with room for further trailing optional parameters (a later
+/// tooltip/source/fetched-at group) so they can be added without reshaping callers, the same
+/// way <see cref="OverlayPlayer"/> itself grew <c>PickOrder</c> and <c>ItemGold</c>.
 /// </summary>
-public sealed record OfficialRankDisplay(string ShortCode);
+public sealed record OfficialRankDisplay(string ShortCode, string StatusText = "", bool IsStale = false);
 
 public sealed record RawPlayerState(
     string StableKey,
