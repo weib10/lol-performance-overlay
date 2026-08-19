@@ -106,3 +106,17 @@ release gate 的乾淨 Git tree 檢查會失敗，repository scan 也會去走�
 ## 完成定義
 
 「完成」不等於能編譯或 Replay 看起來正常。只有在功能、UX、效能、真實對局、隱私、乾淨機器安裝／移除與可重現打包都符合 `docs/PRODUCT_HANDOFF.md` 時，才有資格發布第一個不含 `test`、`測試版` 或 `prerelease` 的版本。
+
+## Agent skills
+
+### Issue tracker
+
+Issues 追蹤在 GitHub Issues（`weib10/lol-performance-overlay`），透過 `gh` CLI 操作。詳見 `docs/agents/issue-tracker.md`。
+
+### Triage labels
+
+沿用五個標準 triage 標籤原名：`needs-triage`、`needs-info`、`ready-for-agent`、`ready-for-human`、`wontfix`。詳見 `docs/agents/triage-labels.md`。
+
+### Domain docs
+
+單一 context 佈局：`CONTEXT.md` + `docs/adr/`（尚未建立）。詳見 `docs/agents/domain.md`。
