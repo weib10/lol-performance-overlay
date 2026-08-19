@@ -59,9 +59,8 @@ public sealed class OverlayWindow : Window
     private TextBlock? _compactRight;
     private TextBlock? _compactRightDetail;
     private Border? _historyPanel;
-    private TextBlock? _historyStatus;
     private TextBlock? _historyMeta;
-    private TextBlock? _historyDetails;
+    private TextBlock? _historyRecentForm;
     private Button? _opGgButton;
     private Uri? _opGgDestination;
     private bool _visualWasChampSelect;
@@ -255,9 +254,8 @@ public sealed class OverlayWindow : Window
         _compactLeftDetail = null;
         _compactRight = null;
         _compactRightDetail = null;
-        _historyStatus = null;
         _historyMeta = null;
-        _historyDetails = null;
+        _historyRecentForm = null;
         _opGgButton = null;
         _visualWasChampSelect = _snapshot.Phase == LeaguePhase.ChampSelect;
 
@@ -458,12 +456,14 @@ public sealed class OverlayWindow : Window
         grid.ColumnDefinitions.Add(new ColumnDefinition { Width = GridLength.Auto });
         var text = new StackPanel();
         text.Children.Add(Text("歷史近期狀態／風格（獨立資訊）", 12.5, "#DDE8F7", FontWeights.SemiBold));
-        _historyStatus = Text(string.Empty, 12.5, "#CBD6E7", FontWeights.Medium);
-        _historyMeta = Text(string.Empty, 12, "#B3C0D4");
-        _historyDetails = Text(string.Empty, 12, "#B3C0D4");
-        text.Children.Add(_historyStatus);
+        // Rank used to live here too, but every row now carries its own official rank short
+        // code and tooltip (issues #7-#9), so this block only says what those rows do not:
+        // the local player's recent-form source, queue, sample count, fetch time, confidence
+        // and play style. See HistoricalPanelPresenter for the composed text.
+        _historyMeta = Text(string.Empty, 12.5, "#CBD6E7", FontWeights.Medium);
+        _historyRecentForm = Text(string.Empty, 12, "#B3C0D4");
         text.Children.Add(_historyMeta);
-        text.Children.Add(_historyDetails);
+        text.Children.Add(_historyRecentForm);
         grid.Children.Add(text);
         _opGgButton = SmallButton("↗", "由你主動在瀏覽器開啟 OP.GG；Overlay 不讀回網頁資料");
         _opGgButton.Width = 34;
@@ -1039,34 +1039,22 @@ public sealed class OverlayWindow : Window
 
     private void UpdateHistoryControls()
     {
-        if (_historyStatus is null || _historyMeta is null || _historyDetails is null || _opGgButton is null)
+        if (_historyMeta is null || _historyRecentForm is null || _opGgButton is null)
         {
             return;
         }
 
         _opGgDestination = TryBuildActivePlayerLink();
         _opGgButton.Visibility = _opGgDestination is null ? Visibility.Collapsed : Visibility.Visible;
-        var entry = FindActiveHistoryEntry();
-        if (entry?.Profile is { } profile)
+        var display = HistoricalPanelPresenter.Describe(FindActiveHistoryEntry()?.Profile);
+        if (display.HasContent)
         {
-            var rank = profile.OfficialRank is null
-                ? "官方牌位未提供"
-                : $"官方牌位 {profile.OfficialRank.Tier} {profile.OfficialRank.Division}";
-            _historyStatus.Text = $"{rank} · {AvailabilityText(entry.Availability)}";
-            _historyMeta.Text =
-                $"來源：{profile.Source.DisplayName} · {profile.Queue.DisplayName} · {profile.SampleCount} 場 · " +
-                $"{profile.FetchedAt.ToLocalTime():MM/dd HH:mm} · {HistoricalConfidenceText(profile.Confidence)}";
-            var champions = string.Join("、", profile.CommonChampions.Take(2).Select(item => item.ChampionName));
-            // A rank-only source (one ranked-entries lookup, no match history) has no
-            // style to read, so PlayStyle is null rather than an invented "balanced"
-            // reading. Say so instead of showing bands nothing backs.
-            var style = profile.PlayStyle is { } playStyle
-                ? $"激進 {StyleText(playStyle.Aggression.Band)}／生存 {StyleText(playStyle.Survival.Band)}／" +
-                  $"團隊 {StyleText(playStyle.TeamParticipation.Band)}／發育 {StyleText(playStyle.Farming.Band)}／" +
-                  $"英雄池 {StyleText(playStyle.ChampionPool.Band)}"
-                : "風格：僅牌位來源，無對局樣本";
-            _historyDetails.Text =
-                $"常用：{(string.IsNullOrWhiteSpace(champions) ? "資料不足" : champions)} · {style}";
+            _historyMeta.Text = display.MetaText;
+            _historyRecentForm.Text = display.RecentFormText;
+            // Collapsed, not just an empty string: an empty TextBlock still reserves a line
+            // of height in the StackPanel, and a rank-only profile (no PlayStyle) has no
+            // style wording to show at all -- not even a sentence explaining the absence.
+            _historyRecentForm.Visibility = display.RecentFormText.Length == 0 ? Visibility.Collapsed : Visibility.Visible;
             if (_historyPanel is not null)
             {
                 _historyPanel.Visibility = Visibility.Visible;
@@ -1077,7 +1065,10 @@ public sealed class OverlayWindow : Window
 
         // No profile means the whole block has nothing to say, and the release criteria
         // let the feature be hidden outright rather than shown as unavailable. Hiding it
-        // beats spending a permanent band on a panel that sits over a game.
+        // beats spending a permanent band on a panel that sits over a game. Collapsed, not
+        // Hidden: Expanded sizes to content (SizeToContent.Height), so Hidden would still
+        // reserve this block's layout space and hold the window at its tallest -- most
+        // visibly during EndOfGame, when the roster clears and there is nothing to show.
         if (_historyPanel is not null)
         {
             _historyPanel.Visibility = Visibility.Collapsed;
@@ -1522,38 +1513,6 @@ public sealed class OverlayWindow : Window
         PerformanceConfidence.Medium => "中信心",
         PerformanceConfidence.Low => "低信心",
         _ => "資料不足"
-    };
-
-    private static string HistoricalConfidenceText(HistoricalConfidence confidence) => confidence switch
-    {
-        HistoricalConfidence.High => "高信心",
-        HistoricalConfidence.Medium => "中信心",
-        HistoricalConfidence.Low => "低信心",
-        _ => "資料不足"
-    };
-
-    private static string StyleText(HistoricalStyleBand band) => band switch
-    {
-        HistoricalStyleBand.VeryLow => "很低",
-        HistoricalStyleBand.Low => "偏低",
-        HistoricalStyleBand.High => "偏高",
-        HistoricalStyleBand.VeryHigh => "很高",
-        _ => "平衡"
-    };
-
-    private static string AvailabilityText(HistoricalProfileAvailability availability) => availability switch
-    {
-        HistoricalProfileAvailability.Available => "近期資料可用",
-        HistoricalProfileAvailability.Partial => "僅取得部分近期資料",
-        HistoricalProfileAvailability.Stale => "顯示較舊的快取資料",
-        HistoricalProfileAvailability.Offline => "目前離線，歷史資料不可用",
-        HistoricalProfileAvailability.PolicyDisabled => "尚未啟用經核准的歷史資料來源",
-        HistoricalProfileAvailability.NotFound => "找不到公開歷史資料",
-        HistoricalProfileAvailability.RateLimited => "來源忙碌，稍後再試",
-        HistoricalProfileAvailability.ServerError => "歷史來源暫時失效",
-        HistoricalProfileAvailability.Timeout => "歷史查詢逾時",
-        HistoricalProfileAvailability.Malformed => "歷史資料格式無法辨識",
-        _ => "歷史資料暫時無法取得"
     };
 
     private SolidColorBrush DotBrush()
