@@ -1,10 +1,10 @@
 # LoL 即時表現 Overlay：產品與 Codex 交接文件
 
-更新日期：2026-08-16
+更新日期：2026-08-20
 
-> 這份文件是累積寫成的，第 1–14 節多數段落寫於 2026-08-10 或更早，第 15、16 節是後續
+> 這份文件是累積寫成的，第 1–14 節多數段落寫於 2026-08-10 或更早，第 15–17 節是後續
 > 里程碑。閱讀時請注意：較早的段落描述問題或計畫時，若後面的里程碑已經處理，內文會加
-> 上「[狀態：...]」標記並指向對應章節；沒有標記的段落視為仍然有效。最新狀態一律以第 16
+> 上「[狀態：...]」標記並指向對應章節；沒有標記的段落視為仍然有效。最新狀態一律以第 17
 > 節與目前程式碼為準，不要只看章節編號較前面的敘述就當作現況。
 
 ## 1. 交接目的
@@ -34,7 +34,7 @@
 - 技術：.NET 8、WPF、自包含單檔 EXE
 - 顯示模式：Dot、Compact、Expanded
 - 資料來源：League Client 本機資料、遊戲內 `127.0.0.1:2999`、Riot 靜態素材
-- 歷史資料：已有 source-neutral model、Synthetic provider 與 unavailable／policy-disabled fallback；沒有合規 live provider 時不查真人資料，OP.GG 僅提供使用者主動開啟的瀏覽器連結。2026-08-16 起 model 額外支援「只有官方牌位、沒有對局風格樣本」的狀態，見第 16 節。
+- 歷史資料：已有 source-neutral model、Synthetic provider 與 unavailable／policy-disabled fallback；沒有合規 live provider 時不查真人資料，OP.GG 僅提供使用者主動開啟的瀏覽器連結。2026-08-16 起 model 額外支援「只有官方牌位、沒有對局風格樣本」的狀態，見第 16 節。[狀態：`14945ec`（2026-08-17）已接上真正的 live provider——`RiotHistoricalProfileTransport` 加上 Settings 裡的 Riot Personal API key 輸入欄位，key 留白時仍是 unavailable／policy-disabled。第 17 節在此基礎上把牌位鋪到 Expanded 每一列。]
 - 自動測試：核心測試已拆成 `net8.0`，可在 Linux 或 Windows 執行；本機開發機（Windows）已確認可直接建置、跑測試、執行 WPF shell（SDK 位於 `%LOCALAPPDATA%\Microsoft\dotnet`，PATH 上的 `dotnet.exe` 可能指向沒有 SDK 的版本，需留意），不必每次都繞 CI。CI 目前只在 `windows-latest` 執行。
 - 候選包：repository 內的共用 PackageBuilder 由 `scripts/package.sh`（Linux／WSL 可用）與 `scripts/package.ps1`（Windows）共同呼叫，產生 EXE + 完全離線 HTML 的兩檔 ZIP、manifest 與 SHA-256。CI（`.github/workflows/windows-package.yml`）只呼叫 Windows 入口。
 - 現有 Release 不應直接重新命名為正式版；它是比較修正前後行為的基準。
@@ -320,6 +320,8 @@ Session loop 從 WPF startup 啟動，async iterator、HTTP await、JSON parsing
 P0 的架構性問題（長生命週期 UI、pointer state machine、snapshot 去重、打包流程）已經處理，Sandcastle 自動化工具已完整移除，Overlay 版面也依第二輪使用者實測回饋大幅精簡（見第 16 節）。下一個真正的瓶頸是**真機互動驗證**，不是再寫更多程式：
 
 > 完整閱讀 AGENTS.md、docs/PRODUCT_HANDOFF.md（特別是第 16 節）與 SECURITY.md。這台機器上 .NET SDK 已可用（見第 3 節路徑備註），先確認能本機建置、跑測試、把 WPF shell 跑起來。用真的滑鼠對 Dot／Compact／Expanded 做拖曳、click-through、鎖定位置測試，不要只靠螢幕截圖判斷「看起來對」。若條件允許，跑一次真實 ChampSelect → Loading → InGame → EndOfGame 全流程，記錄真實 CPU／記憶體／UI 更新延遲，取代目前僅有的 Linux 邏輯層 proxy 數字。若要接牌位資料，Core model 已支援 rank-only profile；下一步是 `IHistoricalProfileTransport` 的 Riot Personal-key 實作與 Settings 裡的 key 輸入欄位（本機儲存，不進 git／不進打包）。每次 push 後務必確認 CI 實際結果，不要只憑本機建置成功就當作驗證完成——本機沒有跑 release scan 那道 gate。
+>
+> [狀態：這段建議任務寫於 2026-08-16。`14945ec`（2026-08-17）已完成上述「下一步」——`IHistoricalProfileTransport` 的 Riot Personal-key 實作、Settings key 輸入欄位與 region 對應都已存在；`96a3dc7`～`8884b60`（2026-08-20，見第 17 節）接著把牌位鋪到 Expanded 每一列並完成量測。真機拖曳、click-through、多螢幕／DPI 與真實對局的 CPU／記憶體／UI 更新延遲仍是未完成項目，見第 17 節「距離發布門檻仍未完成」。]
 
 ## 13. 重要檔案導覽
 
@@ -437,7 +439,7 @@ P0 的架構性問題（長生命週期 UI、pointer state machine、snapshot �
 
 要顯示牌位，Core 的 `HistoricalProfile` 型別原本強制要求 `PlayStyle`（五個對局風格維度）非空——即使資料來源只查了一次牌位、沒有比賽紀錄可以算，也被迫塞入編造的「Balanced」讀數，違反本文件與 `AGENTS.md` 的產品誠實性原則。已將 `PlayStyle` 改為可為 `null`，代表「沒有風格可讀」而非「風格中立」；`HistoricalProfileCoordinator` 的驗證邏輯本來就沒有依賴 `PlayStyle`，新增測試釘住這件事而非只是假設。UI 端（`OverlayWindow.UpdateHistoryControls`）已能正確處理 `PlayStyle` 為 null 的情況，但目前歷史面板整塊沒有掛進畫面（見上表），所以這條路徑還沒有實際畫面可驗證。
 
-**沒有做的**：實際的 `IHistoricalProfileTransport` 實作（呼叫 Riot `ACCOUNT-V1`／`LEAGUE-V4`）、Settings 裡貼 key 的欄位、region 對應。這是下一個獨立的工作項目，本次只確認合規性與鋪好 model 地基。
+**沒有做的**：實際的 `IHistoricalProfileTransport` 實作（呼叫 Riot `ACCOUNT-V1`／`LEAGUE-V4`）、Settings 裡貼 key 的欄位、region 對應。這是下一個獨立的工作項目，本次只確認合規性與鋪好 model 地基。[狀態：`14945ec`（2026-08-17）已完成這三項；第 17 節在此基礎上把牌位鋪到 Expanded 每一列，並補上效能回歸量測。]
 
 ### 過程中的一次 CI 疏失
 
@@ -455,5 +457,93 @@ P0 的架構性問題（長生命週期 UI、pointer state machine、snapshot �
 - 兩台乾淨 Windows 環境的下載／安裝／完整對局／移除驗收；未參與開發的朋友測試。
 - 多螢幕、不同 DPI、解析度切換。
 - 真實對局的 CPU／記憶體／UI 更新延遲量測（現有數字仍是 Linux 邏輯層 proxy）。
-- `LICENSE` 檔仍未補上。
+- `LICENSE` 檔仍未補上。[狀態：`0e59d17`（2026-08-19）已補上 MIT `LICENSE`。]
+- `outputs/` 目錄若有舊 package，早於本輪所有變動，展示前需重新打包。
+
+## 17. 2026-08-20 里程碑：逐列官方牌位與效能回歸驗證
+
+這輪工作是 issue #6（Expanded 十人面板每一列顯示官方牌位）拆出的四張 ready-for-agent 票（#7–#10）加上收尾的量測與文件票（#11），起點是 `14945ec` 已經鋪好的 rank-only model 與 live transport 地基。四張實作票依序是 `96a3dc7`（每列短碼）、`977fa62`（白話失敗狀態）、`edcb59b`（tooltip）、`8884b60`（底部面板收斂），本節記錄決策、量測與仍未完成的部分；commit 內文本身已經很完整，這裡不逐行重述。
+
+### Seam：牌位進 `OverlaySnapshot`，不開第二條 UI 路徑
+
+牌位以 `OverlayPlayer.OfficialRank`（新的 `OfficialRankDisplay?` 欄位）進入既有的 `OverlaySnapshot`／`OverlayPlayer`，而不是另外新增一個投影 seam。這是寫 spec 前就定案的方案：`OfficialRankAttachment.Attach` 是一個無 IO 的同步純函式，輸入 `OverlaySnapshot` 加最近一次 `HistoricalProfilesResult`，輸出新的 `OverlaySnapshot`；沒有變動時回傳同一個 instance，避免製造假 diff。join key 是 `OverlayPlayer.StableKey` 對 `RevealedPlayerIdentity.StableKey`——`VisibleSnapshot` 本來就用同一把 key 比對玩家，不必新增比對邏輯，也不會因為改名或特殊字元錯位。`OverlayPlayerFields` 同步新增 `OfficialRank` flag 並加進 `DiffPlayerFields`／`All`，牌位變動因此自動走既有的 `VisibleSnapshot.Diff`／`Merge` 與 `OverlayUpdateReducer` 節流，`OverlayWindow.ApplySnapshot(snapshot, diff)` 仍然是唯一一條 UI 更新路徑。
+
+歷史查詢是非同步的，結果幾乎一定晚於觸發它的那個 frame。`App.xaml.cs` 原本收到結果後直接呼叫 `_overlay.ApplyHistoricalProfiles`，繞過 reducer；現在改成 session loop 每個 frame 都先用 `AttachLatestHistoricalProfiles` 把「目前已知的最新牌位」貼到當前 snapshot 再送進 reducer，而晚到的查詢結果（`RefreshHistoricalProfilesAsync`）也改為貼到*最新*一次已評分的 snapshot（`_latestFrame`／`_latestEvaluatedSnapshot`，由 `_historyGate` 鎖保護），再呼叫 `OfferFrame` 走一次 reducer，而不是貼到觸發查詢當下的那個舊 snapshot。roster 換人或退出 InGame 時，`CancelHistoricalLookup(clearRoster: true)` 除了既有的 `_historyRosterGeneration` 遞增，也把 `_latestHistoricalProfiles` 清空，避免同一個 `StableKey` 被下一場比賽的新玩家撞上、繼承到舊牌位；晚到的查詢結果另外會先比對 `IsCurrentHistoryGeneration`，過期世代的結果直接丟棄，不會貼到任何 snapshot 上。
+
+版面上，34px 列高與 520 寬完全沒變：新的牌位欄（25px）是用既有欄位讓出來的——大頭貼 34→28、meta 42→38、分數 46→34，各自仍能放得下最長的實際內容（三位數分數、`#10`、`99.9k`），英雄名欄寬不變。
+
+### 決策與捨棄的方案
+
+- **失敗狀態共用一個中性符號（`—`），不是一個原因一個符號。** 這些失敗幾乎都是全隊性的（沒設 key、離線、額度用完），十列一個生僻符號讀起來像程式壞了，不是資訊；真正的原因留在 tooltip 的完整句子裡（`OfficialRankDisplay.StatusText`／`TooltipText`）。
+- **沒有排位天梯的 queue（ARAM）整格收起，不是打符號。** 這個概念在 ARAM 對任何人、任何一局都不可能有值，符號只是每一列都重複的雜訊，`ShortCode` 直接留空字串，`OverlayWindow.UpdatePlayerRank` 已有的「文字為空就收起 cell」邏輯自然適用，不需要新的顯示分支。
+- **順手抓到一個真的 bug：`RiotHistoricalProfileTransport` 把「沒有排位天梯」回報成 `ProviderUnavailable`**——和「來源真的壞掉」共用同一個信號。每一場 ARAM 都會告訴玩家「資料來源故障」，但其實什麼都沒壞。新增 `HistoricalFailureReason.NoRankedLadder`，讓這個語意從 transport 一路帶到 coordinator 再到 presentation，`Describe()` 特別在通用 `Availability` switch 之前先攔截這個 reason，而且刻意讓它和「profile 存在但 `OfficialRank` 為 null 且 queue 沒有天梯」那條路徑輸出逐字相同（`NoRankedLadderFailureReasonMatchesTheProfilePresentNoLadderDisplayExactly` 測試釘住這件事，因為兩條路徑今後很容易在不知不覺中分岔）。
+- **牌位段位名稱改用台灣服用語（鐵／銅／銀／金），不是黑鐵／青銅／白銀／黃金。** 第一版把中國服的低段位詞和宗師／菁英（台灣專用詞）混在同一句 tooltip 裡，等於兩個伺服器的用語同時出現；`edcb59b` 修正為統一使用台灣服全套詞彙。
+- **底部單人歷史面板保留，但職責縮小到牌位無法覆蓋的部分。** 每一列都有牌位之後，底部原本的牌位那半段變成純重複；移除後只留來源、queue、樣本數、取得時間、信心和近期風格（最常用英雄、五維風格），這些是逐列的 25px 欄位無論如何都放不下、只有整段落文字才能講清楚的資訊。曾經考慮整塊移除，但那會連帶砍掉風格呈現，屬於另一個工作項目，因此沒有採用。`HistoricalPanelPresenter.Describe` 在沒有 profile（未查到或查詢失敗）時回傳 `HistoricalPanelDisplay.Empty`，`OverlayWindow` 用 `Visibility.Collapsed`（不是 `Hidden`）整塊收起，理由和第 16 節 `SizeToContent.Height` 的既有規則一致：`Hidden` 仍占版面，會讓視窗卡在最高狀態，尤其在對局結束、名單清空、最該收起空間的時刻最明顯。
+
+### 產品誠實性呈現
+
+每一種狀態（包含全部失敗狀態）的 tooltip 都以同一句「牌位是 Riot 官方資料，分數是本場相對表現，兩者分開呈現，不會合併或換算成單一數值」收尾，一個缺失或過期的牌位不會被誤讀成「已經悄悄算進分數裡」。牌位與分數不只靠顏色區分：牌位欄位在獨立的欄（位置差異）、字級較小、斜體（一個不佔額外寬高、讀起來就是「引用自別處資料」的排版慣例），滿足 AGENTS.md 第 6 點色覺不能是唯一區分依據的要求。`NoTooltipOrStatusTextEverMentionsMmrEloOrWinRateWording` 等測試把「不出現 MMR／ELO／勝率」與「不洩漏 PUUID、LEAGUE-V4、rate limit 等開發者詞彙」都釘成自動測試，不是只在 code review 時人工確認一次。
+
+### 效能回歸量測
+
+量測環境：這台 Windows 開發機、Release build、.NET SDK 8.0.423、既有的 1,800-frame corpus（`PipelinePerformanceTests`，代表每秒一筆、30 分鐘）。改動前的基準取自 `0e59d17`（另開一個 git worktree 量測，避免切換分支影響工作目錄），改動後取自 `8884b60`。兩邊都各跑三次，因為單一次計時樣本不能算量測。
+
+| 指標 | 改動前（3 次） | 改動後（3 次） | 判讀 |
+|---|---|---|---|
+| presentation update 次數 | 30 / 30 / 30 | 30 / 30 / 30 | 未變；相對 legacy 1,800 次仍維持減少 98.3% |
+| reducer 配置 | 114,912 bytes（三次相同） | 114,912 bytes（三次相同） | 完全未變 |
+| reducer 耗時 | 4.569 / 4.881 / 4.916 ms | 4.469 / 4.525 / 5.069 ms | 落在雜訊範圍，無法宣稱有差 |
+| scorer + reducer 耗時 | 59.917 / 60.774 / 61.131 ms | 56.832 / 57.296 / 59.722 ms | 略低但區間重疊，不宣稱改善 |
+| scorer + reducer 配置 | 10,389,664 bytes（三次相同） | 10,533,664 bytes（三次相同） | +144,000 bytes（+1.39%） |
+| forced-GC retained growth | 6,896 bytes | 6,888–6,960 bytes | 未變 |
+
++144,000 bytes 不是雜訊，是可以精確解釋的數字：`1,800 frames × 10 players × 8 bytes`，也就是 `OverlayPlayer` 新增一個 nullable reference 欄位（`OfficialRankDisplay? OfficialRank`）在 64 位元執行環境下每個 player instance 多付的參考位元組。reducer 本身的耗時與配置完全沒有變化，因為 `OfficialRankAttachment.Attach` 發生在 reducer 之前，且沒有變動時直接回傳同一個 snapshot instance；presentation update 次數維持 30 次，代表新欄位沒有讓任何原本被節流掉的 frame 重新觸發更新。
+
+必須誠實說明這些數字不是什麼：這是跨平台 Core 邏輯層的 proxy，不是 WPF frame time、不是 Windows 真實 CPU、不是 Dispatcher 排隊延遲、不是圖片解碼次數，也不是真實拖曳手感。新增的牌位欄（每列一個 `TextBlock`）與每列多一段 tooltip 文字組裝，在真實 WPF UI 執行緒上的繪製與 tooltip 顯示成本完全沒有被這組數字覆蓋到，這點第 16 節已經對舊有數字說過一次，這裡對新增的部分同樣成立。
+
+### 本輪測試與 CI
+
+新增測試：
+
+- `OfficialRankAttachmentTests`（32 案例）：join by `StableKey`、無變動回傳同一 instance、重複貼合不產生 diff／reducer update、roster 換人後舊 entry 不貼到新人、牌位變動只標記牌位 flag（不連帶標記分數／英雄／圖示）、三種 cell 視覺狀態、每種失敗各自的白話句子、`NoRankedLadder` 與「profile 存在但無牌位」兩條路徑輸出逐字相同、stale 標記、`PlayStyle` 為 null 時不編造風格字樣、匿名玩家永遠沒有牌位、tooltip 內容（完整段位名、LP、queue、來源、取得時間、誠實聲明句）、不洩漏開發者詞彙與 MMR／ELO／勝率用語等。
+- `HistoricalPanelPresenterTests`（6 案例）：底部面板文字不再提牌位、meta 文字涵蓋來源／queue／樣本數／取得時間／信心、`PlayStyle` 有無兩種情況、無 profile 時回傳可讓呼叫端收起面板的空結果。
+- `HistoricalCoordinatorTests` 新增 `NoRankedLadderReasonSurvivesTheCoordinatorUnchanged`，`RiotHistoricalProfileTransportTests` 新增／修改對 ARAM 短路徑的斷言，釘住 `NoRankedLadder` 而不是 `Unavailable`／`ProviderUnavailable`。
+
+現況（本次審視時獨立重跑一次確認，不是只看 commit 訊息裡的數字）：核心測試 254／254、Windows-adapter 測試 11／11、PackageBuilder 政策測試 29／29 全數通過，三個測試專案的 Release build 都是 0 warning／0 error。`Tier`／`Division`／`LeaguePoints`／`OfficialRank`／`ShortCode` 等新名稱都不在 `eng/package-config.json` 的 `rawOverlayFieldNames` 阻擋清單內，本輪不需要放寬 gate，release scan 也沒有因為新欄位命名誤判。
+
+CI 狀態必須誠實記錄：這四個實作 commit（`96a3dc7`～`8884b60`）目前只存在於本機 `feature/per-player-rank` 分支，領先 `origin/main` 四個 commit、尚未 push，因此 CI 完全沒有在這幾個 commit 上跑過——本節之前的「本機建置與測試都過」只證明了 build 和 test，release scan 這道 gate 只有 CI 會跑。push 之後仍須依 AGENTS.md 的既有紀律回頭確認 CI 實際變綠，不能把這輪的本機驗證當成完成。
+
+### 文件同步
+
+`14945ec`（2026-08-17，早於這四張票）已經把 live provider、Settings key 欄位與 region 對應全部做完，但當時沒有人回頭把散落在其他文件裡「歷史資料 live provider 未啟用」一類的敘述改掉；這輪一併清掉：
+
+- `README.md`：「歷史資料 live provider 目前未啟用」改為說明 live provider 已實作、opt-in、key 留白時仍是 unavailable／policy-disabled；資料流程圖裡「不含…物品價值」改為「不含…原始裝備陣列；裝備值聚合總和與官方牌位是允許的例外」；對外連線只提了 Data Dragon，加上「貼入 key 後才會連線 Riot 區域主機」；「操作」段落補上逐列牌位／tooltip 的說明。
+- `SECURITY.md`：資料邊界那句和 README 犯了同一個錯（把「物品價值」列為排除項），一併修正；對外連線清單補上 19 個 Riot 區域主機（見九角度審視第 2 點，這是本輪查出最值得記的落差）；補上 Riot key 只存在本機 `settings.json`、不進 log 的說明。
+- `docs/先看這裡.html`：這是**手動維護的原始檔**，不是由 PackageBuilder 產生——`eng/package-config.json` 的 `friendGuideTemplate` 直接指向這個檔案，PackageBuilder 只替換雜湊與版本號兩個 placeholder、注入離線 CSP，不改寫任何文字內容，因此直接編輯這份檔案本身，沒有另外的產生器原始碼要改。「完整面板」卡片補上逐列牌位的說明；「歷史近期狀態／風格」卡片與資料表格裡的「目前未啟用」改為「需要你自己貼入 API key 才會查詢」。
+- `docs/PRODUCT_HANDOFF.md` 第 3、12、16 節：凡是被 `14945ec` 或 `0e59d17`（LICENSE）補上的「沒有做的」項目，都依本文件開頭的既有慣例加上「[狀態：...]」標記並指向對應章節，沒有直接刪改原文——第 3 節歷史資料現況、第 12 節建議任務、第 16 節「沒有做的」與發布門檻清單各一處。
+- `AGENTS.md`：逐條核對後沒有發現需要修正的錯誤敘述；裡面關於 Personal key 的規則本來就是寫給「還沒做這個功能時」的允許性說明，功能做出來之後仍然成立，不需要改。
+
+### 九個角度重新審視
+
+依嚴重度排序；每個角度都有明確結論，不是找不到東西就跳過。
+
+1. **【高】安全與隱私（角度 4）——工作目錄裡一份未追蹤的真人截圖。** repository 根目錄有一個未加入 git 的 `Screen15.png`（約 1.77 MB，最後修改時間 2026-08-17 21:13；`git log --all -- Screen15.png` 確認從未進過任何 commit，`git check-ignore` 確認沒有被 `.gitignore` 排除）。時間點與內容線索都對得上 issue #6「Further Notes」提到的「使用者提供的遊戲內十人計分板截圖，含真實 Riot ID」——正是 AGENTS.md 明講不得進 repository、fixture、log 或 Issue 的那類檔案。它目前只是未追蹤狀態、還沒造成外洩，但正好放在下一次誤觸 `git add` 會撿到的位置。這份審視沒有代為刪除（不在本票範圍，也不是我該單方面處理使用者檔案的決定），但必須點名：**建議儘快刪除或移出 repository 目錄**，並考慮在 `.gitignore` 加一條規則防止同類檔案再次被誤加。
+2. **【中】安全與隱私／打包與維運（角度 4／7）——安全文件曾經漏列新的對外主機。** 在這輪之前，`SECURITY.md` 與 `README.md` 的對外連線清單只列了 loopback 與 `ddragon.leagueoflegends.com`，完全沒提到 `14945ec` 新增、`eng/package-config.json` 的 `runtimeHosts` 裡已經有的 19 個 Riot `ACCOUNT-V1`／`LEAGUE-V4` 區域主機，即使那個連線只在使用者自己貼入 key 之後才會發生。安全文件如果沒有窮舉所有可能的對外目的地，就稱不上是完整的邊界說明。已在本輪一併補上（見「文件同步」章節），但代表 `14945ec`、`44ea328`、`0e59d17` 三個 commit 之間，實際網路行為和文件默默漂移了一段時間都沒被抓到。建議往後每次新增 `runtimeHosts` 時，`SECURITY.md` 的連線清單一併檢查更新。
+3. **【中】使用體驗／相容性／可靠性（角度 1／5／3）——真機互動完全未驗證。** 這台機器螢幕鎖定，無法用真的滑鼠對新的牌位欄做 hover／tooltip 觸發測試，無法確認 25px 欄寬、12.5pt 斜體字在不同 DPI 下是否清楚可讀或被截斷，也沒有跑一場真實對局讓「牌位晚到、re-attach、reducer 再次節流」這條路徑在真實網路延遲與真實 Client 生命週期下跑過。本輪新增的 39 項測試涵蓋了每一種 observable outcome（cell 內容、diff flag、reducer 是否觸發），但「畫面上實際長什麼樣子、滑鼠移過去有沒有反應、對局中會不會卡頓」本身仍然是**未驗證**，不是**已通過**——這點延續第 16 節就已經記錄的既有保留，本輪新增的牌位欄沒有讓它變得更好或更差。
+4. **【中】效能（角度 2）——量測數字不含真實 WPF 繪製成本。** 上方表格的數字是 Linux／Windows 邏輯層 proxy（reducer／scorer 耗時與配置），不包含新增的每列一個 `TextBlock`（牌位欄）與每列多組裝一段 tooltip 文字在真實 WPF UI 執行緒上的繪製與 tooltip 顯示成本。配置成長的 144,000 bytes 已經精確解釋為欄位本身的參考位元組成本，判讀清楚；但真機 UI thread 的實際負擔仍待 Windows 真機量測，屬於第 7 節既有門檻裡尚未完成的部分。
+5. **【低】可理解性與無障礙（角度 6）——檢查後沒有發現問題。** 牌位與分數用欄位位置＋斜體字重雙重區分，不只靠顏色；失敗狀態共用一個中性符號但各自有完整白話 tooltip 句子；`StatusTextNeverLeaksDeveloperJargon`、`NoTooltipOrStatusTextEverMentionsMmrEloOrWinRateWording` 等測試把「不出現 PUUID／LEAGUE-V4／rate limit」與「不出現 MMR／ELO／勝率」都釘成自動測試。
+6. **【低】可維護性與測試性（角度 8）——檢查後沒有發現問題。** `OfficialRankAttachment`／`HistoricalPanelPresenter` 都是無 IO 的靜態純函式，格式化只在 Core 做一次；`OverlayWindow` 只負責顯示既有字串，不做第二次格式化；`App.xaml.cs` 的 re-attach 邏輯統一鎖在既有的 `_historyGate`，沒有新鎖也沒有新的競爭窗口；39 項新測試全部斷言 observable outcome，沒有測 private method 或 WPF visual tree。
+7. **【低】產品誠實性（角度 9）——檢查後沒有發現問題。** 每個狀態（含全部失敗狀態）都附上「牌位是 Riot 官方資料，分數是本場相對表現」句子；`NoRankedLadderFailureReasonMatchesTheProfilePresentNoLadderDisplayExactly` 釘住兩條不同程式路徑的輸出必須逐字相同；牌位與分數永不合併運算或換算成單一數值；`PlayStyle` 缺樣本時維持 `null`，不編造「平衡」讀數。
+8. **【無新增發現】打包與維運（角度 7，功能本身）——檢查後沒有發現問題。** 新欄位名稱不在 `rawOverlayFieldNames` 阻擋清單內，不需要放寬 gate；`PackageBuilder.Tests` 本機重跑 29／29 通過；release scan 未因新欄位命名誤判。（上方第 2 點記錄的是文件漂移問題，不是打包流程本身的問題。）
+
+### 距離發布門檻仍未完成
+
+延續第 16 節既有清單，本輪沒有讓任何一項變得更好，也新增了以下項目：
+
+- 三種模式的真實滑鼠拖曳、click-through、位置鎖定，以及新牌位欄本身的 hover／tooltip 真機互動——都還沒做。
+- 多螢幕、不同 DPI、解析度切換下牌位欄與 tooltip 的實際呈現——都還沒驗證。
+- 真實對局的 CPU／記憶體／UI 更新延遲量測（現有數字仍是邏輯層 proxy，本輪新增的牌位欄與 tooltip 繪製成本同樣不在其中）。
+- 這四個實作 commit 尚未 push，CI 完全沒有在它們身上跑過；push 後必須實際確認 CI 綠燈並記錄通過的 commit，不能只憑本機 build／test 通過。
+- 工作目錄裡未追蹤的 `Screen15.png`（見九角度審視第 1 點）建議在 push 前處理掉，避免被任何自動化或手動操作誤加進版本控制。
+- 兩台乾淨 Windows 環境的下載／安裝／完整對局／移除驗收、未參與開發的朋友測試——仍未開始。
 - `outputs/` 目錄若有舊 package，早於本輪所有變動，展示前需重新打包。

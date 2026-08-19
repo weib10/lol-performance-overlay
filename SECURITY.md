@@ -10,13 +10,14 @@ Linux cross-build 成功只能證明程式與 Windows targeting toolchain 相容
 
 - `127.0.0.1`／`localhost`：唯讀取得同一台電腦上的 League Client 階段、選角與本場即時資料。
 - `https://ddragon.leagueoflegends.com`：下載 Riot 公開的英雄／物品靜態資料與圖示。
-- League Client 的自簽 TLS 憑證只在 request URI 仍是精確 loopback host 時略過驗證；這組 client 禁止 redirect，不能拿來連任意遠端 HTTPS host。Data Dragon client 也禁止 redirect，所有 runtime URI 都先經 allowlist。
+- 只有在使用者自己於設定貼入 Riot Personal API key 之後，程式才會另外連線到 Riot 官方 ACCOUNT-V1／LEAGUE-V4 所在的區域主機查詢官方牌位；沒有貼 key 時完全不會連線這些主機。允許的主機清單集中在 `eng/package-config.json` 的 `runtimeHosts`，其中屬於 Riot 官方 API 的是 19 個（3 個大洲路由加 16 個平台主機），以精確主機比對，不接受萬用字元或偽造子網域。
+- League Client 的自簽 TLS 憑證只在 request URI 仍是精確 loopback host 時略過驗證；這組 client 禁止 redirect，不能拿來連任意遠端 HTTPS host。Data Dragon client 與 Riot 官方 API client 也都禁止 redirect，所有 runtime URI 都先經 allowlist。
 - OP.GG 只可由使用者主動交給預設瀏覽器開啟；程式不自動抓取、解析頁面或讀取 browser cookie／session。
 - 沒有玩家資料上傳、遙測、廣告或本工具自己的遠端服務。
-- League Client 臨時本機通行資訊不寫入硬碟或 log。
+- League Client 臨時本機通行資訊不寫入硬碟或 log；Riot Personal API key 只存在使用者本機的 `settings.json`，不進 git、不進打包、不寫入 log。
 - 不注入遊戲、不讀取遊戲記憶體、不模擬輸入、不修改遊戲檔案，也不還原匿名玩家。
-- Overlay 安全資料邊界不包含原始 KDA、等級、CS、死亡時間或物品價值。
-- live 歷史 provider 未啟用時會顯示 unavailable／policy-disabled；Synthetic provider 只供測試與 Replay，不得在 package 中冒充真人資料。
+- Overlay 安全資料邊界不包含原始 KDA、等級、CS、死亡時間或原始裝備陣列；裝備值聚合總和是 2026-08-16 起的允許例外，官方牌位（已格式化的短碼與白話狀態文字，非原始 API 回應）也在資料邊界內，理由與界線見 `AGENTS.md`。
+- live 歷史 provider 已實作（Riot Personal API key，使用者本機貼入，不進打包）；未貼 key、貼入空白，或查詢失敗時都會顯示 unavailable／policy-disabled；Synthetic provider 只供測試與 Replay，不得在 package 中冒充真人資料。
 
 ## 打包防線
 

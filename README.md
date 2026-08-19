@@ -30,9 +30,9 @@ ZIP 解壓後只包含：
 - 本場玩家資料只在記憶體內用於即時計分，不寫成玩家歷史或上傳。
 - 不還原選角階段原本匿名的玩家。
 - League Client 的臨時本機通行資訊只存在記憶體。
-- 程式對外只從 `https://ddragon.leagueoflegends.com` 下載 Riot 公開英雄／物品素材；OP.GG 只提供使用者主動開啟的普通瀏覽器連結，程式不抓取頁面。
+- 程式對外預設只從 `https://ddragon.leagueoflegends.com` 下載 Riot 公開英雄／物品素材；只有在你自己於設定貼入 Riot Personal API key 之後，才會另外連線到 Riot 官方 ACCOUNT-V1／LEAGUE-V4 所在的區域主機查詢官方牌位（allowlist 見 [`eng/package-config.json`](eng/package-config.json) 的 `runtimeHosts`，精確主機比對，不接受萬用字元或偽造子網域）。OP.GG 只提供使用者主動開啟的普通瀏覽器連結，程式不抓取頁面。
 - 顯示設定與公開素材快取位於 `%LOCALAPPDATA%\LolPerformanceOverlay`。
-- 歷史資料 live provider 目前未啟用；正式 package 不會用 Synthetic provider 冒充真人資料，核心 Overlay 在歷史資料 unavailable／policy-disabled 時仍可使用。
+- 歷史資料 live provider 已實作：在設定貼入你自己申請、只存在本機的 Riot Personal API key 後即可查詢官方牌位；key 留白時維持 unavailable／policy-disabled。正式 package 不會用 Synthetic provider 冒充真人資料，核心 Overlay 在歷史資料 unavailable／policy-disabled 時仍可使用。
 
 未簽章 EXE 可能觸發 SmartScreen。第三方工具無法誠實宣稱零風險；不接受這項不確定性的人不應執行。完整邊界與回報方式見 [`SECURITY.md`](SECURITY.md)。
 
@@ -43,7 +43,7 @@ ZIP 解壓後只包含：
 - 「鎖定位置」開啟後，整個 Overlay 不接收滑鼠，避免攔截遊戲操作；以快捷鍵或系統匣切換顯示、解除鎖定或重設到可見螢幕範圍。
 - 預設快捷鍵是 `Ctrl+Shift+O`；若被占用，設定會顯示實際可用組合。
 
-分數只描述目前這一場的相對表現，不是官方牌位、長期實力、隱藏 MMR／ELO 或勝率預測。歷史近期狀態若未來啟用，必須與本場分數分開，並顯示來源、queue／mode、樣本數、取得時間和信心。
+分數只描述目前這一場的相對表現，不是官方牌位、長期實力、隱藏 MMR／ELO 或勝率預測。設定貼入你自己的 Riot Personal API key 後，`Expanded` 完整面板每一列會併排顯示該玩家的官方牌位短碼（例如 `D4`），滑鼠移到列上可看到完整階級、LP、所屬 queue、資料來源、取得時間，以及是否為較舊的快取牌位；牌位一律和本場分數分開呈現、不合併計算。沒有貼 key 或查詢失敗時，牌位欄會用白話說明原因，不是空白或假資料。底部單人歷史區塊則只保留來源、queue、樣本數、取得時間、信心與近期風格，不再重複牌位。
 
 ## 一鍵建置、測試與打包
 
@@ -71,12 +71,16 @@ GitHub Actions 的 [`windows-package.yml`](.github/workflows/windows-package.yml
 League Client／遊戲
   → 本機唯讀資料
   → 背景解析、評分、去重與節流
-  → OverlaySnapshot（不含原始 KDA、等級、CS、死亡時間或物品價值）
+  → OverlaySnapshot（不含原始 KDA、等級、CS、死亡時間或原始裝備陣列；裝備值聚合總和與官方牌位是允許的例外，見 AGENTS.md）
   → WPF 只更新可見變化
 
 Riot 靜態素材服務
   → 英雄／物品資料與圖示
   → 本機快取
+
+Riot 官方 API（僅在你自己貼入 Personal key 時才會發生）
+  → ACCOUNT-V1／LEAGUE-V4 查詢官方牌位
+  → 本機快取、有效期與失敗降級，與本場即時資料分開呈現
 ```
 
 產品門檻、量測基準與仍待真機驗收項目見 [`docs/PRODUCT_HANDOFF.md`](docs/PRODUCT_HANDOFF.md)；歷史資料政策與來源取捨見 [`docs/HISTORICAL_DATA_RESEARCH.md`](docs/HISTORICAL_DATA_RESEARCH.md)。
