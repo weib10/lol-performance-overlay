@@ -34,6 +34,14 @@ public partial class App : System.Windows.Application
     private Task? _sessionLoopTask;
     private Task? _historyLookupTask;
     private LeagueSessionFrame? _pendingFrame;
+    // Guarded by _historyGate alongside the roster fields below: the latest raw (pre-rank)
+    // frame/snapshot pair from Evaluate(), and the latest fetched profiles result. A
+    // late-arriving lookup result re-attaches onto these -- not onto whatever the reducer
+    // last presented -- so it reflects the newest game state instead of the state at the
+    // moment the lookup was kicked off.
+    private LeagueSessionFrame? _latestFrame;
+    private OverlaySnapshot? _latestEvaluatedSnapshot;
+    private HistoricalProfilesResult? _latestHistoricalProfiles;
     private string[]? _historyRosterKeys;
     private string? _historyRosterRegion;
     private int _historyRosterQueueId;
@@ -221,8 +229,12 @@ public partial class App : System.Windows.Application
             await foreach (var frame in _sessionSource.WatchAsync(cancellationToken))
             {
                 var snapshot = _scorer.Evaluate(frame);
-                BeginHistoricalLookup(frame, snapshot, cancellationToken);
-                var update = OfferFrame(frame, snapshot, cancellationToken);
+                // Attach the most recently fetched ranks before offering the frame, so rank
+                // rides the same VisibleSnapshot diff and OverlayUpdateReducer throttle as
+                // every other field instead of a second UI update path.
+                var withRank = AttachLatestHistoricalProfiles(frame, snapshot);
+                BeginHistoricalLookup(frame, withRank, cancellationToken);
+                var update = OfferFrame(frame, withRank, cancellationToken);
                 if (update is not null)
                 {
                     await Dispatcher.InvokeAsync(
@@ -519,12 +531,40 @@ public partial class App : System.Windows.Application
                 identities,
                 new HistoricalProfileQuery(queue),
                 cancellationToken).ConfigureAwait(false);
+
+            // The result almost always lands after the frame that triggered it has already
+            // been presented. Re-attach it onto the most recent snapshot -- not the one it
+            // was requested for -- and push that back through OfferFrame/the reducer, so a
+            // late rank gets the same throttling and no-op suppression as every other field
+            // instead of a second path into the UI.
+            OverlayUpdate? rankUpdate = null;
+            LeagueSessionFrame? rankFrame = null;
+            if (IsCurrentHistoryGeneration(rosterGeneration))
+            {
+                SetLatestHistoricalProfiles(result);
+                if (TryGetLatestEvaluatedFrame() is { } latest)
+                {
+                    var attached = OfficialRankAttachment.Attach(latest.Snapshot, result);
+                    rankFrame = latest.Frame;
+                    rankUpdate = OfferFrame(latest.Frame, attached, cancellationToken);
+                }
+            }
+
             await Dispatcher.InvokeAsync(
                 () =>
                 {
-                    if (IsCurrentHistoryGeneration(rosterGeneration))
+                    if (!IsCurrentHistoryGeneration(rosterGeneration))
                     {
-                        _overlay?.ApplyHistoricalProfiles(result);
+                        return;
+                    }
+
+                    // The bottom single-player panel still bypasses the reducer -- it reads
+                    // ActiveRiotId directly rather than a snapshot field (see
+                    // UpdateHistoryControls) and stays out of this ticket's scope.
+                    _overlay?.ApplyHistoricalProfiles(result);
+                    if (rankUpdate is not null && rankFrame is not null)
+                    {
+                        ApplyFrame(rankFrame, rankUpdate);
                     }
                 },
                 System.Windows.Threading.DispatcherPriority.Normal,
@@ -633,6 +673,10 @@ public partial class App : System.Windows.Application
                 _historyRosterQueueId = 0;
                 _historyRosterGameMode = null;
                 _historyRosterGeneration++;
+                // A roster change or a phase exit must drop any rank already fetched for the
+                // old roster too -- otherwise a StableKey that happens to be reused would
+                // silently carry a stale rank into whatever replaces it next frame.
+                _latestHistoricalProfiles = null;
             }
         }
 
@@ -645,6 +689,43 @@ public partial class App : System.Windows.Application
         lock (_historyGate)
         {
             return _historyRosterGeneration == generation;
+        }
+    }
+
+    /// <summary>
+    /// Attaches the latest fetched official ranks onto this frame's snapshot and records both
+    /// as the newest known state, so a lookup result that arrives later has something current
+    /// to re-attach onto (see RefreshHistoricalProfilesAsync). Pure and synchronous other than
+    /// the lock; safe to call from the session loop thread every frame.
+    /// </summary>
+    private OverlaySnapshot AttachLatestHistoricalProfiles(LeagueSessionFrame frame, OverlaySnapshot snapshot)
+    {
+        HistoricalProfilesResult? profiles;
+        lock (_historyGate)
+        {
+            _latestFrame = frame;
+            _latestEvaluatedSnapshot = snapshot;
+            profiles = _latestHistoricalProfiles;
+        }
+
+        return OfficialRankAttachment.Attach(snapshot, profiles);
+    }
+
+    private void SetLatestHistoricalProfiles(HistoricalProfilesResult result)
+    {
+        lock (_historyGate)
+        {
+            _latestHistoricalProfiles = result;
+        }
+    }
+
+    private (LeagueSessionFrame Frame, OverlaySnapshot Snapshot)? TryGetLatestEvaluatedFrame()
+    {
+        lock (_historyGate)
+        {
+            return _latestFrame is null || _latestEvaluatedSnapshot is null
+                ? null
+                : (_latestFrame, _latestEvaluatedSnapshot);
         }
     }
 

@@ -54,6 +54,17 @@ public sealed record ChampSelectMember(
 
 public sealed record RawItemState(int ItemId, int Count, int GoldValue);
 
+/// <summary>
+/// Already-formatted official rank display data for one row of the Expanded panel --
+/// following the same convention as <see cref="OverlayPlayer.PerformanceLabel"/>, the
+/// formatting (tier letter, division digit) happens once in Core, never in the WPF adapter.
+/// Only the short code exists today; it is a positional record with room for trailing
+/// optional parameters so a later status-wording field and a later tooltip/source/fetched-at
+/// group can be added without reshaping callers, the same way <see cref="OverlayPlayer"/>
+/// itself grew <c>PickOrder</c> and <c>ItemGold</c>.
+/// </summary>
+public sealed record OfficialRankDisplay(string ShortCode);
+
 public sealed record RawPlayerState(
     string StableKey,
     string RiotId,
@@ -98,7 +109,12 @@ public sealed record OverlayPlayer(
     // Derived from what the in-game scoreboard already shows plus static Data Dragon
     // prices; it is not the player's unspent gold, which the client does not expose
     // for anyone but the local player. Aggregate only -- never the raw array.
-    int? ItemGold = null);
+    int? ItemGold = null,
+    // Live game only: this player's official rank in the current queue, already formatted
+    // for display. Null until the asynchronous history lookup resolves (see
+    // OfficialRankAttachment.Attach in the Presentation namespace) and always null for
+    // anonymous players -- the lookup never runs for them. Champ select never sets it.
+    OfficialRankDisplay? OfficialRank = null);
 
 public sealed record OverlayTeam(
     int Team,

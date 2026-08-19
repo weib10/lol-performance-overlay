@@ -523,15 +523,23 @@ public sealed class OverlayWindow : Window
         {
             Height = 34,
             Margin = new Thickness(0, 0, 0, 3),
-            Padding = new Thickness(5, 0, 7, 0),
+            // Trimmed from the original (5,0,7,0) to make room for the rank column below
+            // without taking any width away from the champion name -- see the column
+            // widths comment beside the rank TextBlock.
+            Padding = new Thickness(4, 0, 5, 0),
             Background = new SolidColorBrush(Color.FromArgb(92, 22, 29, 42)),
             CornerRadius = new CornerRadius(6)
         };
         var grid = new Grid();
-        grid.ColumnDefinitions.Add(new ColumnDefinition { Width = new GridLength(34) });
+        // Column widths were rebalanced, not just extended, when the rank column was added:
+        // avatar 34->28, meta 42->38, score 46->34 (each still comfortably fits its longest
+        // real value -- three digits, "#10", "99.9k"), freeing exactly the width the new
+        // rank column needs so the champion name's share of the row is unchanged.
+        grid.ColumnDefinitions.Add(new ColumnDefinition { Width = new GridLength(28) });
         grid.ColumnDefinitions.Add(new ColumnDefinition());
-        grid.ColumnDefinitions.Add(new ColumnDefinition { Width = new GridLength(42) });
-        grid.ColumnDefinitions.Add(new ColumnDefinition { Width = new GridLength(46) });
+        grid.ColumnDefinitions.Add(new ColumnDefinition { Width = new GridLength(38) });
+        grid.ColumnDefinitions.Add(new ColumnDefinition { Width = new GridLength(25) });
+        grid.ColumnDefinitions.Add(new ColumnDefinition { Width = new GridLength(34) });
         var avatar = CreateAvatar(26);
         grid.Children.Add(avatar.Root);
         var champion = Text(string.Empty, 13, "#EEF3FA", FontWeights.SemiBold);
@@ -549,11 +557,21 @@ public sealed class OverlayWindow : Window
             HorizontalAlignment.Right);
         Grid.SetColumn(meta, 2);
         grid.Children.Add(meta);
+        // Official rank short code (e.g. "D4"); Core has already formatted it (see
+        // OfficialRankDisplay), this adapter only ever displays the string. A colour
+        // distinct from the score keeps "official data" and "this session's relative
+        // reading" from reading as one blended number -- see AGENTS.md's product-honesty
+        // rule -- without needing a second line the 34px row has no room for. Blank (never
+        // fetched, unranked, lookup failed) leaves the cell empty rather than showing a
+        // word here; the human-readable status text is a later ticket.
+        var rank = Text(string.Empty, 12.5, "#D9B36C", FontWeights.SemiBold, HorizontalAlignment.Right);
+        Grid.SetColumn(rank, 3);
+        grid.Children.Add(rank);
         var score = Text(string.Empty, 17, "#E7EDF7", FontWeights.Bold, HorizontalAlignment.Right);
-        Grid.SetColumn(score, 3);
+        Grid.SetColumn(score, 4);
         grid.Children.Add(score);
         root.Child = grid;
-        return new PlayerRowView(root, avatar, champion, score, meta);
+        return new PlayerRowView(root, avatar, champion, score, meta, rank);
     }
 
     private static StackPanel CompactTeam(
@@ -825,6 +843,7 @@ public sealed class OverlayWindow : Window
         view.Score.Text = player.PerformanceScore.HasValue ? $"{player.PerformanceScore:0}" : "—";
         view.Score.Foreground = Brush(ScoreColor(player.PerformanceScore));
         UpdatePlayerMeta(view, player);
+        UpdatePlayerRank(view, player);
         UpdateRowTooltip(view, player);
     }
 
@@ -861,6 +880,18 @@ public sealed class OverlayWindow : Window
         view.Meta.Visibility = text.Length == 0 ? Visibility.Collapsed : Visibility.Visible;
     }
 
+    /// <summary>
+    /// The rank column's text is the short code Core already formatted; a player with no
+    /// resolved rank yet (never fetched, unranked, lookup failed) leaves the cell blank
+    /// rather than showing a word here -- the human-readable status text is a later ticket.
+    /// </summary>
+    private static void UpdatePlayerRank(PlayerRowView view, OverlayPlayer player)
+    {
+        var text = player.OfficialRank?.ShortCode ?? string.Empty;
+        view.Rank.Text = text;
+        view.Rank.Visibility = text.Length == 0 ? Visibility.Collapsed : Visibility.Visible;
+    }
+
     private void UpdatePlayerRow(
         PlayerRowView view,
         OverlayPlayer player,
@@ -887,6 +918,11 @@ public sealed class OverlayWindow : Window
         if ((fields & (OverlayPlayerFields.PickOrder | OverlayPlayerFields.ItemGold)) != 0)
         {
             UpdatePlayerMeta(view, player);
+        }
+
+        if ((fields & OverlayPlayerFields.OfficialRank) != 0)
+        {
+            UpdatePlayerRank(view, player);
         }
 
         if ((fields & (OverlayPlayerFields.DisplayName |
@@ -1525,7 +1561,8 @@ public sealed class OverlayWindow : Window
         AvatarView Avatar,
         TextBlock Champion,
         TextBlock Score,
-        TextBlock Meta);
+        TextBlock Meta,
+        TextBlock Rank);
 
     private sealed record TeamView(
         Border Root,

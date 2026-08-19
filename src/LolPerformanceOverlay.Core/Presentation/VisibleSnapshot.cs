@@ -44,8 +44,9 @@ public enum OverlayPlayerFields
     Confidence = 1 << 7,
     PickOrder = 1 << 8,
     ItemGold = 1 << 9,
+    OfficialRank = 1 << 10,
     All = DisplayName | Team | ChampionName | ChampionIconPath | IsAnonymous |
-          PerformanceScore | PerformanceLabel | Confidence | PickOrder | ItemGold
+          PerformanceScore | PerformanceLabel | Confidence | PickOrder | ItemGold | OfficialRank
 }
 
 public enum SnapshotItemChange
@@ -281,6 +282,7 @@ public static class VisibleSnapshot
         AddIf(previous.Confidence != current.Confidence, OverlayPlayerFields.Confidence, ref fields);
         AddIf(previous.PickOrder != current.PickOrder, OverlayPlayerFields.PickOrder, ref fields);
         AddIf(previous.ItemGold != current.ItemGold, OverlayPlayerFields.ItemGold, ref fields);
+        AddIf(previous.OfficialRank != current.OfficialRank, OverlayPlayerFields.OfficialRank, ref fields);
         return fields;
     }
 
