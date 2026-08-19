@@ -22,6 +22,17 @@ public static class OfficialRankAttachment
     private const string StaleSuffix = "*";
     private const string FailureMarker = "—";
 
+    // The one sentence that makes AGENTS.md rule 9 (產品誠實性) unmistakable in the row
+    // tooltip (see OverlayWindow.UpdateRowTooltip, which appends TooltipText beneath the
+    // existing name/champion/score block): the rank above this line is Riot's own data, the
+    // score elsewhere in the same tooltip is this program's own reading of the current game,
+    // and the two are never combined into one number. Appended to every state's TooltipText --
+    // including every failure -- so a missing or stale rank can never read as "folded into the
+    // score instead". No MMR/ELO/win-rate wording, ever; see
+    // NoTooltipOrStatusTextEverMentionsMmrEloOrWinRateWording.
+    private const string HonestyNote =
+        "牌位是 Riot 官方資料，分數是本場相對表現，兩者分開呈現，不會合併或換算成單一數值。";
+
     /// <summary>
     /// Returns a snapshot with each visible, non-anonymous player's <see cref="OverlayPlayer.OfficialRank"/>
     /// set from <paramref name="profiles"/> where a match exists, joined by
@@ -119,7 +130,7 @@ public static class OfficialRankAttachment
         var isStale = entry.Availability == HistoricalProfileAvailability.Stale;
         if (entry.Profile?.OfficialRank is { } rank)
         {
-            return FormatRank(rank, isStale);
+            return FormatRank(entry.Profile, rank, isStale);
         }
 
         if (entry.Profile is not null)
@@ -129,7 +140,9 @@ public static class OfficialRankAttachment
             // player has not climbed it yet ("unranked"), versus a queue with no ladder concept
             // at all (ARAM/450 and anything else), where calling the player "unranked" would
             // falsely imply a ladder exists for them to be unplaced on.
-            return IsRankedQueue(entry.Profile.Queue.QueueId) ? Unranked(isStale) : NoLadder(isStale);
+            return IsRankedQueue(entry.Profile.Queue.QueueId)
+                ? Unranked(entry.Profile, isStale)
+                : NoLadder(isStale);
         }
 
         // Stale never reaches here -- HistoricalProfileEntry.Failure's invariant forbids it --
@@ -149,7 +162,7 @@ public static class OfficialRankAttachment
     // "D4", "E2", "G1" -- tier initial plus division digit, the shorthand players already
     // use for themselves. The three apex tiers have no division the way I-IV mean it for
     // everyone else, so their code is the tier letters alone.
-    private static OfficialRankDisplay FormatRank(OfficialRank rank, bool isStale)
+    private static OfficialRankDisplay FormatRank(HistoricalProfile profile, OfficialRank rank, bool isStale)
     {
         var tierCode = TierCode(rank.Tier);
         var shortCode = IsApexTier(rank.Tier) ? tierCode : WithDivision(tierCode, rank.Division);
@@ -157,7 +170,8 @@ public static class OfficialRankAttachment
         // stale one gets the marker below plus a sentence, so a three-hour-old cache is never
         // mistaken for this instant's rank.
         var statusText = isStale ? "顯示的是較舊的快取牌位，不是最新資料" : string.Empty;
-        return new OfficialRankDisplay(WithStaleSuffix(shortCode, isStale), statusText, isStale);
+        var tooltipText = BuildTooltipText($"官方牌位：{FullRankText(rank)}", profile, isStale);
+        return new OfficialRankDisplay(WithStaleSuffix(shortCode, isStale), statusText, isStale, tooltipText);
     }
 
     private static string WithDivision(string tierCode, string division)
@@ -166,13 +180,50 @@ public static class OfficialRankAttachment
         return divisionDigit is null ? tierCode : $"{tierCode}{divisionDigit}";
     }
 
+    // "鑽石 IV · 42 LP" -- the full tier name and division a tooltip reader actually wants,
+    // not the row cell's terse shorthand. Apex tiers have no division the way I-IV mean it for
+    // everyone else, so the tier name stands alone. LP is left out entirely, not shown as
+    // "0 LP", when Riot did not report it -- OfficialRank.LeaguePoints is nullable for exactly
+    // that reason.
+    private static string FullRankText(OfficialRank rank)
+    {
+        var tierName = FullTierName(rank.Tier);
+        var body = IsApexTier(rank.Tier) ? tierName : $"{tierName} {rank.Division.Trim().ToUpperInvariant()}";
+        return rank.LeaguePoints is { } leaguePoints ? $"{body} · {leaguePoints} LP" : body;
+    }
+
+    // zh-tw is the client's own vocabulary for the nine tiers plus Emerald, matching the
+    // examples in issue #9's own description (鑽石 IV, 翡翠 II, 大師) -- unlike TierCode below,
+    // this is never abbreviated, because the tooltip is exactly the place a player asked for
+    // the full name instead of the row cell's shorthand.
+    private static string FullTierName(string tier) => tier.Trim().ToUpperInvariant() switch
+    {
+        // 鐵/銅/銀/金, not 黑鐵/青銅/白銀/黃金: the latter are the Chinese-server names, and
+        // this build ships to Taiwan players (the replay fixture is a TW2 one). Mixing them
+        // with 宗師/菁英 below -- which are Taiwan-only names -- would put two servers'
+        // vocabularies in one tooltip.
+        "IRON" => "鐵",
+        "BRONZE" => "銅",
+        "SILVER" => "銀",
+        "GOLD" => "金",
+        "PLATINUM" => "白金",
+        "EMERALD" => "翡翠",
+        "DIAMOND" => "鑽石",
+        "MASTER" => "大師",
+        "GRANDMASTER" => "宗師",
+        "CHALLENGER" => "菁英",
+        _ => tier.Trim()
+    };
+
     // 未定位 is standard zh-tw LoL vocabulary and it is real information about the player --
     // distinct from every failure below, which is information about the app, not the player --
     // so it keeps its own marker rather than folding into FailureMarker.
-    private static OfficialRankDisplay Unranked(bool isStale) => new(
-        WithStaleSuffix("未", isStale),
-        "這個模式目前還沒有牌位，這位玩家尚未定位",
-        isStale);
+    private static OfficialRankDisplay Unranked(HistoricalProfile profile, bool isStale)
+    {
+        const string statusText = "這個模式目前還沒有牌位，這位玩家尚未定位";
+        var tooltipText = BuildTooltipText($"官方牌位：{statusText}", profile, isStale);
+        return new OfficialRankDisplay(WithStaleSuffix("未", isStale), statusText, isStale, tooltipText);
+    }
 
     // ShortCode is empty on purpose, not a marker: in a queue with no ranked ladder (ARAM and
     // the like) the concept can never have a value, on any player, in any game played in that
@@ -180,12 +231,53 @@ public static class OfficialRankAttachment
     // information -- see OverlayWindow.UpdatePlayerRank, which already collapses the cell
     // whenever the text is empty. IsStale is still recorded honestly (for #9's tooltip) even
     // though the cell stays empty either way -- there is no base marker for a "*" to attach to.
-    private static OfficialRankDisplay NoLadder(bool isStale) => new(
-        string.Empty,
-        "這個模式沒有排位天梯，查不到官方牌位",
-        isStale);
+    //
+    // The tooltip deliberately never reads queue/source/fetch time off a profile here, even
+    // though the profile-present call site below has one to read: this state is also reachable
+    // through a Profile-absent failure entry carrying NoRankedLadder (see the other call site
+    // in Describe and RiotHistoricalProfileTransport.FetchAsync), and
+    // NoRankedLadderFailureReasonMatchesTheProfilePresentNoLadderDisplayExactly pins that both
+    // paths must produce byte-identical output. The failure path never has a profile to read
+    // those fields from, so the profile-present path cannot show them either without the two
+    // silently drifting apart.
+    private static OfficialRankDisplay NoLadder(bool isStale)
+    {
+        const string statusText = "這個模式沒有排位天梯，查不到官方牌位";
+        var tooltipText = BuildTooltipText($"官方牌位：{statusText}", profile: null, isStale);
+        return new OfficialRankDisplay(string.Empty, statusText, isStale, tooltipText);
+    }
 
     private static string WithStaleSuffix(string code, bool isStale) => isStale ? code + StaleSuffix : code;
+
+    /// <summary>
+    /// Composes the row tooltip's official-rank block (issue #9). <paramref name="rankLine"/>
+    /// already carries its own "官方牌位：" label; below it, when <paramref name="profile"/> is
+    /// available, the queue this reading is for, who supplied it, and when -- straight off
+    /// <see cref="HistoricalProfile.Queue"/>/<see cref="HistoricalProfile.Source"/>/
+    /// <see cref="HistoricalProfile.FetchedAt"/>, no re-derivation. <paramref name="isStale"/>
+    /// adds a plain-language line of its own -- staleness must be stated in words, not implied
+    /// by <see cref="StaleSuffix"/> alone, since the row cell can be too terse (or, for
+    /// <see cref="NoLadder"/>, entirely empty) to carry it. <see cref="HonestyNote"/> closes
+    /// every path without exception.
+    /// </summary>
+    private static string BuildTooltipText(string rankLine, HistoricalProfile? profile, bool isStale)
+    {
+        var lines = new List<string> { rankLine };
+        if (profile is not null)
+        {
+            lines.Add(
+                $"{profile.Queue.DisplayName} · 來源：{profile.Source.DisplayName} · " +
+                $"查詢時間 {profile.FetchedAt.ToLocalTime():MM/dd HH:mm}");
+        }
+
+        if (isStale)
+        {
+            lines.Add("這是較舊的快取資料，不是最新查詢結果。");
+        }
+
+        lines.Add(HonestyNote);
+        return string.Join("\n", lines);
+    }
 
     /// <summary>
     /// Every lookup failure collapses to the same neutral "nothing to show" marker in the cell
@@ -201,28 +293,27 @@ public static class OfficialRankAttachment
     /// refusal, so there is nothing here that could tell the two apart even if the wording
     /// wanted to.
     /// </summary>
-    private static OfficialRankDisplay Failure(HistoricalProfileAvailability availability) => availability switch
+    private static OfficialRankDisplay Failure(HistoricalProfileAvailability availability)
     {
-        HistoricalProfileAvailability.Offline => new OfficialRankDisplay(
-            FailureMarker, "目前沒有網路連線，查不到牌位"),
-        HistoricalProfileAvailability.PolicyDisabled => new OfficialRankDisplay(
-            FailureMarker, "還沒有設定官方牌位查詢功能"),
-        HistoricalProfileAvailability.NotFound => new OfficialRankDisplay(
-            FailureMarker, "查無這位玩家的官方牌位紀錄"),
-        HistoricalProfileAvailability.RateLimited => new OfficialRankDisplay(
-            FailureMarker, "查詢額度已經用完，稍後會恢復"),
-        HistoricalProfileAvailability.ServerError => new OfficialRankDisplay(
-            FailureMarker, "官方牌位來源暫時故障，稍後再試"),
-        HistoricalProfileAvailability.Timeout => new OfficialRankDisplay(
-            FailureMarker, "查詢逾時，稍後再試"),
-        HistoricalProfileAvailability.Malformed => new OfficialRankDisplay(
-            FailureMarker, "收到的牌位資料無法辨識"),
-        HistoricalProfileAvailability.Unavailable => new OfficialRankDisplay(
-            FailureMarker, "官方牌位來源暫時忙碌，稍後再試"),
+        var statusText = FailureStatusText(availability);
+        var tooltipText = BuildTooltipText($"官方牌位：{statusText}", profile: null, isStale: false);
+        return new OfficialRankDisplay(FailureMarker, statusText, IsStale: false, tooltipText);
+    }
+
+    private static string FailureStatusText(HistoricalProfileAvailability availability) => availability switch
+    {
+        HistoricalProfileAvailability.Offline => "目前沒有網路連線，查不到牌位",
+        HistoricalProfileAvailability.PolicyDisabled => "還沒有設定官方牌位查詢功能",
+        HistoricalProfileAvailability.NotFound => "查無這位玩家的官方牌位紀錄",
+        HistoricalProfileAvailability.RateLimited => "查詢額度已經用完，稍後會恢復",
+        HistoricalProfileAvailability.ServerError => "官方牌位來源暫時故障，稍後再試",
+        HistoricalProfileAvailability.Timeout => "查詢逾時，稍後再試",
+        HistoricalProfileAvailability.Malformed => "收到的牌位資料無法辨識",
+        HistoricalProfileAvailability.Unavailable => "官方牌位來源暫時忙碌，稍後再試",
         // Available/Partial/Stale never reach here -- HistoricalProfileEntry.Failure's own
         // invariant forbids constructing a failure entry with any of the three. This arm only
         // keeps the switch exhaustive against future enum growth; it should never execute.
-        _ => new OfficialRankDisplay(FailureMarker, "官方牌位暫時無法取得")
+        _ => "官方牌位暫時無法取得"
     };
 
     private static string TierCode(string tier) => tier.Trim().ToUpperInvariant() switch

@@ -71,13 +71,23 @@ public sealed record RawItemState(int ItemId, int Count, int GoldValue);
 /// colour alone.
 /// <see cref="StatusText"/> is the fuller, friend-facing sentence behind that marker and stays
 /// fully distinct per state even where ShortCode does not -- empty only for a fresh resolved
-/// rank, which needs no further explanation. It exists today so issue #9's tooltip has
-/// something to read; this ticket does not wire it into any visible control.
-/// It is a positional record with room for further trailing optional parameters (a later
-/// tooltip/source/fetched-at group) so they can be added without reshaping callers, the same
-/// way <see cref="OverlayPlayer"/> itself grew <c>PickOrder</c> and <c>ItemGold</c>.
+/// rank, which needs no further explanation.
+/// <see cref="TooltipText"/> is the full row tooltip's official-rank block (issue #9): full
+/// tier name, LP when reported, the queue the rank belongs to, the source's display name, the
+/// fetch time, and staleness stated in words when <see cref="IsStale"/> -- composed once here
+/// in Core, never in the WPF adapter, so it is an observable string tests can assert directly.
+/// It always ends with an explicit sentence separating this rank (Riot's official data) from
+/// the row's score (this program's own reading of the current game), because that is exactly
+/// the distinction a player must never be able to blend together -- see AGENTS.md rule 9.
+/// It is a positional record with room for further trailing optional parameters so it can keep
+/// growing without reshaping callers, the same way <see cref="OverlayPlayer"/> itself grew
+/// <c>PickOrder</c> and <c>ItemGold</c>.
 /// </summary>
-public sealed record OfficialRankDisplay(string ShortCode, string StatusText = "", bool IsStale = false);
+public sealed record OfficialRankDisplay(
+    string ShortCode,
+    string StatusText = "",
+    bool IsStale = false,
+    string TooltipText = "");
 
 public sealed record RawPlayerState(
     string StableKey,

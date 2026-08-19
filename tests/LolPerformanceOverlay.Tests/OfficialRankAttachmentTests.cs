@@ -389,6 +389,145 @@ public sealed class OfficialRankAttachmentTests
         Assert.Null(reducer.Offer(second));
     }
 
+    // Issue #9: OfficialRankDisplay.TooltipText is the composed row-tooltip block Core hands
+    // the WPF adapter verbatim (see OverlayWindow.UpdateRowTooltip). Everything below asserts
+    // its content directly, the same way the ShortCode/StatusText tests above do.
+
+    [Fact]
+    public void TooltipTextIncludesFullTierNameAndLeaguePoints()
+    {
+        var display = AttachSingle(AvailableEntry(1, "DIAMOND", "IV"));
+
+        Assert.Contains("鑽石 IV", display.TooltipText);
+        Assert.Contains("42 LP", display.TooltipText);
+    }
+
+    [Fact]
+    public void TooltipTextOmitsLeaguePointsWhenRiotDidNotReportThem()
+    {
+        var display = AttachSingle(AvailableEntryWithoutLeaguePoints(1, "GOLD", "III"));
+
+        Assert.Contains("金 III", display.TooltipText);
+        Assert.DoesNotContain("LP", display.TooltipText);
+    }
+
+    [Fact]
+    public void TooltipTextSkipsDivisionWordingForApexTiersWithNoMeaningfulDivision()
+    {
+        // Riot's API always reports "I" as the division for the three apex tiers -- it does
+        // not mean anything the way I-IV do for everyone else, so it must not appear.
+        var display = AttachSingle(AvailableEntry(1, "MASTER", "I"));
+
+        Assert.Contains("大師 · 42 LP", display.TooltipText);
+        Assert.DoesNotContain("大師 I", display.TooltipText);
+    }
+
+    [Fact]
+    public void TooltipTextIncludesQueueSourceDisplayNameAndFetchTime()
+    {
+        var display = AttachSingle(AvailableEntry(1, "DIAMOND", "IV"));
+
+        Assert.Contains(HistoricalQueue.RankedSolo.DisplayName, display.TooltipText);
+        Assert.Contains("合成測試資料", display.TooltipText);
+        Assert.Contains(Now.ToLocalTime().ToString("MM/dd HH:mm"), display.TooltipText);
+    }
+
+    [Fact]
+    public void StaleRankTooltipStatesStalenessInWordsNotJustTheAsteriskSuffix()
+    {
+        var display = AttachSingle(StaleEntry(1, "DIAMOND", "IV"));
+
+        Assert.Contains("*", display.ShortCode);
+        Assert.Contains("較舊", display.TooltipText);
+    }
+
+    [Fact]
+    public void TooltipTextAttributesTheRankToRiotAndTheScoreToThisGame()
+    {
+        var display = AttachSingle(AvailableEntry(1, "DIAMOND", "IV"));
+
+        Assert.Contains("Riot", display.TooltipText);
+        Assert.Contains("本場相對表現", display.TooltipText);
+    }
+
+    [Fact]
+    public void RankOnlyProfileWithNoPlayStyleSampleProducesATooltipWithNoStyleWordingAtAll()
+    {
+        // HistoricalProfile.PlayStyle null (a single ranked-entries lookup, no match history --
+        // exactly what RiotHistoricalProfileTransport produces) is a legitimate rank-only
+        // source, not a gap to paper over. The tooltip must never invent a style reading for it.
+        var identity = HistoricalTestData.Player(1);
+        var rankOnlyProfile = HistoricalTestData.Profile(
+            identity,
+            HistoricalQueue.RankedSolo,
+            Now,
+            sampleCount: 0,
+            includePlayStyle: false);
+        Assert.Null(rankOnlyProfile.PlayStyle);
+        var display = AttachSingle(
+            HistoricalProfileEntry.WithProfile(identity, HistoricalProfileAvailability.Available, rankOnlyProfile));
+
+        var styleWords = new[]
+        {
+            "平衡", "很低", "偏低", "偏高", "很高", "Balanced",
+            "風格", "激進", "生存", "團隊", "發育", "英雄池"
+        };
+        Assert.All(styleWords, word => Assert.DoesNotContain(word, display.TooltipText));
+    }
+
+    [Fact]
+    public void TooltipTextNeverMentionsPlayStyleEvenWhenTheProfileHasOne()
+    {
+        // The tooltip this ticket adds only ever covers rank -- style is out of scope for it --
+        // so the same "no style wording" guarantee must hold even when a profile has a style
+        // to read, not just when PlayStyle happens to be null.
+        var identity = HistoricalTestData.Player(1);
+        var profileWithStyle = HistoricalTestData.Profile(identity, HistoricalQueue.RankedSolo, Now);
+        Assert.NotNull(profileWithStyle.PlayStyle);
+        var display = AttachSingle(
+            HistoricalProfileEntry.WithProfile(identity, HistoricalProfileAvailability.Available, profileWithStyle));
+
+        var styleWords = new[]
+        {
+            "平衡", "很低", "偏低", "偏高", "很高", "Balanced",
+            "風格", "激進", "生存", "團隊", "發育", "英雄池"
+        };
+        Assert.All(styleWords, word => Assert.DoesNotContain(word, display.TooltipText));
+    }
+
+    [Fact]
+    public void NoTooltipOrStatusTextEverMentionsMmrEloOrWinRateWording()
+    {
+        var forbidden = new[] { "MMR", "ELO", "勝率", "WIN RATE", "WINRATE" };
+        var displays = AllReachableDisplays().Append(AttachSingle(AvailableEntry(1, "DIAMOND", "IV")));
+
+        foreach (var display in displays)
+        {
+            foreach (var term in forbidden)
+            {
+                Assert.DoesNotContain(term, display.TooltipText.ToUpperInvariant());
+                Assert.DoesNotContain(term, display.StatusText.ToUpperInvariant());
+            }
+        }
+    }
+
+    [Fact]
+    public void EveryReachableDisplayHasANonEmptyTooltipTextOnceALookupResultExists()
+    {
+        // A row is never blank on hover once a lookup completed for it -- unranked, no-ladder
+        // and every failure each get a tooltip explaining why, not just a resolved rank.
+        Assert.All(AllReachableDisplays(), display => Assert.False(string.IsNullOrWhiteSpace(display.TooltipText)));
+    }
+
+    [Fact]
+    public void TooltipTextIsDeterministicForIdenticalProfileInput()
+    {
+        var first = AttachSingle(AvailableEntry(1, "DIAMOND", "IV"));
+        var second = AttachSingle(AvailableEntry(1, "DIAMOND", "IV"));
+
+        Assert.Equal(first.TooltipText, second.TooltipText);
+    }
+
     // Builds the snapshot's lone occupant from the entry's own identity, rather than a
     // separately-passed player number, so a caller can never accidentally mismatch StableKeys
     // between the entry it is attaching and the row it expects the result on.
@@ -564,6 +703,24 @@ public sealed class OfficialRankAttachmentTests
         var profile = new HistoricalProfile(
             HistoricalQueue.RankedSolo,
             new OfficialRank(HistoricalQueue.RankedSolo, tier, division, 42),
+            sampleCount: 20,
+            fetchedAt: Now,
+            HistoricalConfidence.High,
+            Array.Empty<HistoricalChampionUsage>(),
+            Array.Empty<HistoricalRoleUsage>(),
+            playStyle: null,
+            new HistoricalProfileSource(HistoricalSourceKind.Synthetic, "合成測試資料"));
+        return HistoricalProfileEntry.WithProfile(identity, HistoricalProfileAvailability.Available, profile);
+    }
+
+    // Riot does not always report LeaguePoints (OfficialRank.LeaguePoints is nullable for
+    // exactly that reason); this builds the entry AvailableEntry cannot, one with no LP at all.
+    private static HistoricalProfileEntry AvailableEntryWithoutLeaguePoints(int number, string tier, string division)
+    {
+        var identity = HistoricalTestData.Player(number);
+        var profile = new HistoricalProfile(
+            HistoricalQueue.RankedSolo,
+            new OfficialRank(HistoricalQueue.RankedSolo, tier, division),
             sampleCount: 20,
             fetchedAt: Now,
             HistoricalConfidence.High,

@@ -558,13 +558,17 @@ public sealed class OverlayWindow : Window
         Grid.SetColumn(meta, 2);
         grid.Children.Add(meta);
         // Official rank short code (e.g. "D4"); Core has already formatted it (see
-        // OfficialRankDisplay), this adapter only ever displays the string. A colour
-        // distinct from the score keeps "official data" and "this session's relative
-        // reading" from reading as one blended number -- see AGENTS.md's product-honesty
-        // rule -- without needing a second line the 34px row has no room for. Blank (never
-        // fetched, unranked, lookup failed) leaves the cell empty rather than showing a
-        // word here; the human-readable status text is a later ticket.
+        // OfficialRankDisplay), this adapter only ever displays the string. Colour alone is
+        // not a legitimate way to separate it from the score (AGENTS.md rule 6 -- colour-blind
+        // readers must not lose the distinction), so it also gets its own column (position),
+        // a smaller SemiBold size against the score's larger Bold, and italics: a quoted-data
+        // convention that reads as "sourced from elsewhere" the moment you see it, at zero
+        // extra width or height. Hovering the row spells the same separation out in words (see
+        // UpdateRowTooltip/OfficialRankDisplay.TooltipText) for anyone the typography alone
+        // does not reach. Blank (never fetched, unranked, lookup failed) leaves the cell empty
+        // rather than showing a word here; UpdatePlayerRank explains the state on hover instead.
         var rank = Text(string.Empty, 12.5, "#D9B36C", FontWeights.SemiBold, HorizontalAlignment.Right);
+        rank.FontStyle = FontStyles.Italic;
         Grid.SetColumn(rank, 3);
         grid.Children.Add(rank);
         var score = Text(string.Empty, 17, "#E7EDF7", FontWeights.Bold, HorizontalAlignment.Right);
@@ -847,12 +851,25 @@ public sealed class OverlayWindow : Window
         UpdateRowTooltip(view, player);
     }
 
+    /// <summary>
+    /// The name/champion/score block below is composed here, same as always. The official-rank
+    /// block appended after it is not -- <see cref="OfficialRankDisplay.TooltipText"/> already
+    /// arrives fully worded from Core (full tier name, LP, queue, source, fetch time, staleness
+    /// in words, and the Riot-vs-this-game separation AGENTS.md rule 9 requires); this adapter
+    /// only ever displays that string, it does not decide any of its wording.
+    /// </summary>
     private static void UpdateRowTooltip(PlayerRowView view, OverlayPlayer player)
     {
         var reading = player.PerformanceLabel is null
             ? player.IsAnonymous ? "匿名" : "尚未開始"
             : $"{player.PerformanceLabel} · {ConfidenceText(player.Confidence)}";
-        view.Root.ToolTip = $"{player.DisplayName}\n{player.ChampionName} · {reading}";
+        var tooltip = $"{player.DisplayName}\n{player.ChampionName} · {reading}";
+        if (!string.IsNullOrEmpty(player.OfficialRank?.TooltipText))
+        {
+            tooltip += $"\n\n{player.OfficialRank.TooltipText}";
+        }
+
+        view.Root.ToolTip = tooltip;
     }
 
     /// <summary>
@@ -883,7 +900,9 @@ public sealed class OverlayWindow : Window
     /// <summary>
     /// The rank column's text is the short code Core already formatted; a player with no
     /// resolved rank yet (never fetched, unranked, lookup failed) leaves the cell blank
-    /// rather than showing a word here -- the human-readable status text is a later ticket.
+    /// rather than showing a word here -- the human-readable status lives in the row's
+    /// tooltip instead (see UpdateRowTooltip/OfficialRankDisplay.TooltipText), where it has
+    /// room to be a full sentence instead of a 25px-wide word.
     /// </summary>
     private static void UpdatePlayerRank(PlayerRowView view, OverlayPlayer player)
     {
@@ -929,7 +948,8 @@ public sealed class OverlayWindow : Window
                        OverlayPlayerFields.ChampionName |
                        OverlayPlayerFields.PerformanceLabel |
                        OverlayPlayerFields.Confidence |
-                       OverlayPlayerFields.IsAnonymous)) != 0)
+                       OverlayPlayerFields.IsAnonymous |
+                       OverlayPlayerFields.OfficialRank)) != 0)
         {
             UpdateRowTooltip(view, player);
         }
