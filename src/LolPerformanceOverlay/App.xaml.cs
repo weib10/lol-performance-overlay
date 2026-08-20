@@ -273,7 +273,6 @@ public partial class App : System.Windows.Application
         }
 
         _overlay.ApplySnapshot(update.Snapshot, update.Diff);
-        _overlay.SetPlatformRegion(frame.PlatformRegion);
         if (frame.Phase != LeaguePhase.InGame)
         {
             _overlay.ClearHistoricalProfiles();
@@ -558,9 +557,9 @@ public partial class App : System.Windows.Application
                         return;
                     }
 
-                    // The bottom single-player panel still bypasses the reducer -- it reads
-                    // ActiveRiotId directly rather than a snapshot field (see
-                    // UpdateHistoryControls) and stays out of this ticket's scope.
+                    // The header's OP.GG multi-search button still bypasses the reducer -- it
+                    // reads _historicalProfiles directly (see OverlayWindow.UpdateHistoryControls)
+                    // rather than a snapshot field, so it is pushed straight through here.
                     _overlay?.ApplyHistoricalProfiles(result);
                     if (rankUpdate is not null && rankFrame is not null)
                     {

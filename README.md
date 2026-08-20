@@ -30,7 +30,7 @@ ZIP 解壓後只包含：
 - 本場玩家資料只在記憶體內用於即時計分，不寫成玩家歷史或上傳。
 - 不還原選角階段原本匿名的玩家。
 - League Client 的臨時本機通行資訊只存在記憶體。
-- 程式對外預設只從 `https://ddragon.leagueoflegends.com` 下載 Riot 公開英雄／物品素材；只有在你自己於設定貼入 Riot Personal API key 之後，才會另外連線到 Riot 官方 ACCOUNT-V1／LEAGUE-V4 所在的區域主機查詢官方牌位（allowlist 見 [`eng/package-config.json`](eng/package-config.json) 的 `runtimeHosts`，精確主機比對，不接受萬用字元或偽造子網域）。OP.GG 只提供使用者主動開啟的普通瀏覽器連結，程式不抓取頁面。
+- 程式對外預設只從 `https://ddragon.leagueoflegends.com` 下載 Riot 公開英雄／物品素材；只有在你自己於設定貼入 Riot Personal API key 之後，才會另外連線到 Riot 官方 ACCOUNT-V1／LEAGUE-V4 所在的區域主機查詢官方牌位（allowlist 見 [`eng/package-config.json`](eng/package-config.json) 的 `runtimeHosts`，精確主機比對，不接受萬用字元或偽造子網域）。展開面板頂端的 ↗ 按鈕會開啟 OP.GG 的多人搜尋連結，一次帶出本場所有已知玩家（含各自的 Riot ID 標籤，避免同名玩家開錯人），僅供使用者主動在瀏覽器開啟，程式不抓取頁面。
 - 顯示設定與公開素材快取位於 `%LOCALAPPDATA%\LolPerformanceOverlay`。
 - 歷史資料 live provider 已實作：在設定貼入你自己申請、只存在本機的 Riot Personal API key 後即可查詢官方牌位；key 留白時維持 unavailable／policy-disabled。正式 package 不會用 Synthetic provider 冒充真人資料，核心 Overlay 在歷史資料 unavailable／policy-disabled 時仍可使用。
 

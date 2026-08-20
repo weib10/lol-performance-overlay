@@ -12,7 +12,7 @@ Linux cross-build 成功只能證明程式與 Windows targeting toolchain 相容
 - `https://ddragon.leagueoflegends.com`：下載 Riot 公開的英雄／物品靜態資料與圖示。
 - 只有在使用者自己於設定貼入 Riot Personal API key 之後，程式才會另外連線到 Riot 官方 ACCOUNT-V1／LEAGUE-V4 所在的區域主機查詢官方牌位；沒有貼 key 時完全不會連線這些主機。允許的主機清單集中在 `eng/package-config.json` 的 `runtimeHosts`，其中屬於 Riot 官方 API 的是 19 個（3 個大洲路由加 16 個平台主機），以精確主機比對，不接受萬用字元或偽造子網域。
 - League Client 的自簽 TLS 憑證只在 request URI 仍是精確 loopback host 時略過驗證；這組 client 禁止 redirect，不能拿來連任意遠端 HTTPS host。Data Dragon client 與 Riot 官方 API client 也都禁止 redirect，所有 runtime URI 都先經 allowlist。
-- OP.GG 只可由使用者主動交給預設瀏覽器開啟；程式不自動抓取、解析頁面或讀取 browser cookie／session。
+- OP.GG 只可由使用者主動交給預設瀏覽器開啟；展開面板的 ↗ 按鈕開啟的是 OP.GG 多人搜尋連結，一次涵蓋本場所有已知玩家（每人都帶 Riot ID 標籤，避免同名玩家連到別人），仍然只是一個 URL，程式不自動抓取、解析頁面或讀取 browser cookie／session。
 - 沒有玩家資料上傳、遙測、廣告或本工具自己的遠端服務。
 - League Client 臨時本機通行資訊不寫入硬碟或 log；Riot Personal API key 只存在使用者本機的 `settings.json`，不進 git、不進打包、不寫入 log。
 - 不注入遊戲、不讀取遊戲記憶體、不模擬輸入、不修改遊戲檔案，也不還原匿名玩家。

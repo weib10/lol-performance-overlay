@@ -478,7 +478,7 @@ P0 的架構性問題（長生命週期 UI、pointer state machine、snapshot �
 - **沒有排位天梯的 queue（ARAM）整格收起，不是打符號。** 這個概念在 ARAM 對任何人、任何一局都不可能有值，符號只是每一列都重複的雜訊，`ShortCode` 直接留空字串，`OverlayWindow.UpdatePlayerRank` 已有的「文字為空就收起 cell」邏輯自然適用，不需要新的顯示分支。[狀態：第 18 節加入 Solo／Flex 牌位 fallback 後，ARAM 現在會顯示玩家的 Solo 或 Flex 牌位（找不到時才是「未」），不再整格收起；這裡描述的是 fallback 之前、ARAM 完全查不到任何牌位時的舊行為。]
 - **順手抓到一個真的 bug：`RiotHistoricalProfileTransport` 把「沒有排位天梯」回報成 `ProviderUnavailable`**——和「來源真的壞掉」共用同一個信號。每一場 ARAM 都會告訴玩家「資料來源故障」，但其實什麼都沒壞。新增 `HistoricalFailureReason.NoRankedLadder`，讓這個語意從 transport 一路帶到 coordinator 再到 presentation，`Describe()` 特別在通用 `Availability` switch 之前先攔截這個 reason，而且刻意讓它和「profile 存在但 `OfficialRank` 為 null 且 queue 沒有天梯」那條路徑輸出逐字相同（`NoRankedLadderFailureReasonMatchesTheProfilePresentNoLadderDisplayExactly` 測試釘住這件事，因為兩條路徑今後很容易在不知不覺中分岔）。[狀態：第 18 節的單／彈牌位 fallback 工作把 ARAM 短路徑本身拿掉了——沒有天梯的 queue 現在會實際查 Solo／Flex 牌位，不再短路——`NoRankedLadder` 因此不再有任何路徑能產生它，已經整個從 enum 移除；上面提到的兩條路徑與那個測試都不存在了，`Describe()` 的「沒有天梯」分支也併回「未定位」。]
 - **牌位段位名稱改用台灣服用語（鐵／銅／銀／金），不是黑鐵／青銅／白銀／黃金。** 第一版把中國服的低段位詞和宗師／菁英（台灣專用詞）混在同一句 tooltip 裡，等於兩個伺服器的用語同時出現；`edcb59b` 修正為統一使用台灣服全套詞彙。
-- **底部單人歷史面板保留，但職責縮小到牌位無法覆蓋的部分。** 每一列都有牌位之後，底部原本的牌位那半段變成純重複；移除後只留來源、queue、樣本數、取得時間、信心和近期風格（最常用英雄、五維風格），這些是逐列的 25px 欄位無論如何都放不下、只有整段落文字才能講清楚的資訊。曾經考慮整塊移除，但那會連帶砍掉風格呈現，屬於另一個工作項目，因此沒有採用。`HistoricalPanelPresenter.Describe` 在沒有 profile（未查到或查詢失敗）時回傳 `HistoricalPanelDisplay.Empty`，`OverlayWindow` 用 `Visibility.Collapsed`（不是 `Hidden`）整塊收起，理由和第 16 節 `SizeToContent.Height` 的既有規則一致：`Hidden` 仍占版面，會讓視窗卡在最高狀態，尤其在對局結束、名單清空、最該收起空間的時刻最明顯。
+- **底部單人歷史面板保留，但職責縮小到牌位無法覆蓋的部分。** 每一列都有牌位之後，底部原本的牌位那半段變成純重複；移除後只留來源、queue、樣本數、取得時間、信心和近期風格（最常用英雄、五維風格），這些是逐列的 25px 欄位無論如何都放不下、只有整段落文字才能講清楚的資訊。曾經考慮整塊移除，但那會連帶砍掉風格呈現，屬於另一個工作項目，因此沒有採用。`HistoricalPanelPresenter.Describe` 在沒有 profile（未查到或查詢失敗）時回傳 `HistoricalPanelDisplay.Empty`，`OverlayWindow` 用 `Visibility.Collapsed`（不是 `Hidden`）整塊收起，理由和第 16 節 `SizeToContent.Height` 的既有規則一致：`Hidden` 仍占版面，會讓視窗卡在最高狀態，尤其在對局結束、名單清空、最該收起空間的時刻最明顯。[狀態：2026-08-20 後續整塊移除，見第 19 節——使用者指出每一列已經有牌位之後，這塊面板只剩下的來源／樣本數／風格資訊仍是一段對局中永遠佔用的固定版面成本；OP.GG 連結改搬進標題列，且從單人改成本場多人搜尋。]
 
 ### 產品誠實性呈現
 
@@ -506,7 +506,7 @@ P0 的架構性問題（長生命週期 UI、pointer state machine、snapshot �
 新增測試：
 
 - `OfficialRankAttachmentTests`（32 案例）：join by `StableKey`、無變動回傳同一 instance、重複貼合不產生 diff／reducer update、roster 換人後舊 entry 不貼到新人、牌位變動只標記牌位 flag（不連帶標記分數／英雄／圖示）、三種 cell 視覺狀態、每種失敗各自的白話句子、`NoRankedLadder` 與「profile 存在但無牌位」兩條路徑輸出逐字相同、stale 標記、`PlayStyle` 為 null 時不編造風格字樣、匿名玩家永遠沒有牌位、tooltip 內容（完整段位名、LP、queue、來源、取得時間、誠實聲明句）、不洩漏開發者詞彙與 MMR／ELO／勝率用語等。
-- `HistoricalPanelPresenterTests`（6 案例）：底部面板文字不再提牌位、meta 文字涵蓋來源／queue／樣本數／取得時間／信心、`PlayStyle` 有無兩種情況、無 profile 時回傳可讓呼叫端收起面板的空結果。
+- `HistoricalPanelPresenterTests`（6 案例）：底部面板文字不再提牌位、meta 文字涵蓋來源／queue／樣本數／取得時間／信心、`PlayStyle` 有無兩種情況、無 profile 時回傳可讓呼叫端收起面板的空結果。[狀態：2026-08-20 後續，`HistoricalPanelPresenter` 與這個測試檔都已整個刪除，見第 19 節。]
 - `HistoricalCoordinatorTests` 新增 `NoRankedLadderReasonSurvivesTheCoordinatorUnchanged`，`RiotHistoricalProfileTransportTests` 新增／修改對 ARAM 短路徑的斷言，釘住 `NoRankedLadder` 而不是 `Unavailable`／`ProviderUnavailable`。
 
 現況（本次審視時獨立重跑一次確認，不是只看 commit 訊息裡的數字）：核心測試 254／254、Windows-adapter 測試 11／11、PackageBuilder 政策測試 29／29 全數通過，三個測試專案的 Release build 都是 0 warning／0 error。`Tier`／`Division`／`LeaguePoints`／`OfficialRank`／`ShortCode` 等新名稱都不在 `eng/package-config.json` 的 `rawOverlayFieldNames` 阻擋清單內，本輪不需要放寬 gate，release scan 也沒有因為新欄位命名誤判。
@@ -618,3 +618,34 @@ ARAM 以前完全不打 Riot API；現在每一場 ARAM 都會對每位有 Riot 
 第 17、18 節的所有工作以 `feature/per-player-rank` 分支 push，並由 PR #12 觸發 CI。通過的 commit 是 `7b6912f`，run `32344465905`，`windows-latest`；`Build, test, scan, and package` 這一步成功，代表本機沒有的 release scan（敏感字串、開發者路徑、raw overlay 欄位、網域允許清單、兩檔 ZIP 契約）也一併通過。這是 AGENTS.md 要求的「push 之後實際確認 CI 結果並記錄通過的 commit」，不是以本機建置與測試代替。
 
 尚未做、延續第 17 節既有清單的部分：真機滑鼠 hover 是否能清楚看到點狀底線、tooltip 觸發是否順手，以及牌位欄在不同 DPI 下是否清楚可讀——開發機在這輪作業中途鎖屏，之後無法截圖，因此仍然是「未驗證」而不是「已通過」。CI 綠燈證明的是建置、測試與掃描，不是畫面。
+
+## 19. 2026-08-20 後續：拿掉底部歷史面板，OP.GG 改成本場多人搜尋
+
+第 17 節做完逐列官方牌位後留下一個決定：「底部單人歷史面板保留，但職責縮小」（見第 17 節「決策與捨棄的方案」）。這次使用者直接要求整塊拿掉——每一列已經有自己的官方牌位短碼與 tooltip，底部面板剩下的來源／queue／樣本數／信心／風格這幾行，對本場來說多半不是新資訊，卻是一段固定佔用 Expanded 面板最下方、對局進行中持續存在的版面成本。使用者要的是把僅存的「在瀏覽器開啟 OP.GG」按鈕搬進標題列（不佔版面高度），並且從只連本人改成一次帶出整場玩家。
+
+### 改動範圍
+
+- `src/LolPerformanceOverlay.Core/Historical/OpGgProfileLinkBuilder.cs`：新增 `TryBuildMultiSearch(IReadOnlyList<RevealedPlayerIdentity>, out ExternalBrowserAction)`，連結格式為 `https://op.gg/zh-tw/lol/multisearch/{region}?summoners={entries}`（`region` 沿用既有 `SupportedRegions` 對照表；`entries` 是每位玩家 `GameName#TagLine` 個別 percent-encode 後用逗號連接——tag line 是 `RevealedPlayerIdentity` 的必填欄位，不會出現只搜尋裸遊戲名稱、進而連到同名其他玩家的情況）。整隊必須是同一個 region（一場對局本來就只有一個 platform），對應不到或彼此不一致都回傳 `false`；空清單回傳 `false`；輸入超過 10 人只取前 10 個，防止呼叫端誤傳造成 URL 無限增長。目的地一樣先過 `NetworkDestinationPolicy.RequireAllowed(..., UserInitiatedBrowser)`；host 仍是 `op.gg`，`eng/package-config.json` 的 `userInitiatedBrowserHosts`／`documentationHosts` 本來就有這個 host，不需要放寬 allowlist。
+- `src/LolPerformanceOverlay/UI/OverlayWindow.cs`：移除 `BuildHistoryPanel`／`_historyPanel`／`_historyMeta`／`_historyRecentForm`；`BuildHeader` 新增 `allowOpGg` 參數，只有 `BuildExpanded` 傳 `true`（`BuildCompact` 沿用預設值 `false`，維持這顆按鈕原本只在 Expanded 出現的範圍），↗ 因此和 ⚙／— 排在同一列標題列裡，Expanded 少掉整塊底部面板的高度。`UpdateHistoryControls` 改成只管這一顆按鈕的 Visibility，連結來源換成新的 `TryBuildRosterLink()`——直接讀 `_historicalProfiles.Entries[].Identity`（整場，不是只有本人）餵給 `TryBuildMultiSearch`。原本只為了單人 fallback 存在的 `FindActiveHistoryEntry`／`TryBuildActivePlayerLink`／`TryCreateActiveIdentity`／`SetPlatformRegion`／`_platformRegion` 因此全部失去唯一呼叫端，一併移除，避免留下沒有呼叫端的程式碼；`App.xaml.cs` 對應拿掉 `_overlay.SetPlatformRegion(frame.PlatformRegion)` 呼叫，以及一句已經過期的註解。
+- `src/LolPerformanceOverlay.Core/Presentation/HistoricalPanelPresenter.cs` 與 `tests/LolPerformanceOverlay.Tests/HistoricalPanelPresenterTests.cs` 整個刪除：面板拿掉後這個類別沒有任何呼叫端——`grep` 全 repository 確認除了它自己與已刪除的測試檔，沒有其他地方引用 `HistoricalPanelPresenter`／`HistoricalPanelDisplay`。
+
+### 「沒有貼 key 也能用」追過程式碼確認，不是假設
+
+使用者的驗收條件是「不論有沒有貼 Riot key，多人搜尋都要能用」。追蹤 `App.xaml.cs` 的 `BeginHistoricalLookup`：整場非匿名玩家（最多 10 人）先在這裡各自組成 `RevealedPlayerIdentity`，送進 `_historicalProvider.GetProfilesAsync`；沒有貼 key 時 `HistoricalProfileProviders.CreateShippingDefault` 回傳 `PolicyDisabledHistoricalProfileProvider`，它的 `GetProfilesAsync` 仍然對每一個輸入的 `player` 呼叫 `HistoricalProfileEntry.Failure(player, ...)`——`identity` 是這個 factory method 的必填參數，所以結果裡的每個 entry 一定帶著身分，只是沒有 `Profile`。`OverlayWindow.TryBuildRosterLink()` 只用得到 `Identity`，不看 `Profile`，這條路徑因此完全不需要 key 就能組出連結。
+
+### 測試
+
+新增 `tests/LolPerformanceOverlay.Tests/OpGgMultiSearchLinkBuilderTests.cs`（7 案例）：十人整隊產生一條涵蓋所有人、各自帶 tag 的連結；含空白與 `&` 的身分正確 percent-encode（`Uri.EscapeDataString` 對整段 `GameName#TagLine` 一起跳脫，逗號、百分號等其他保留字元原則上同樣會被跳脫，不會被誤讀成下一個項目的分隔符）；region 對應不到回傳 `false`；隊伍成員 region 彼此不一致回傳 `false`；空名單回傳 `false`；產生的目的地通過 `NetworkDestinationPolicy.IsAllowed(..., UserInitiatedBrowser)`；11 人輸入時只取前 10 個，不是失敗也不會把 URL 無限拉長。刪除 `HistoricalPanelPresenterTests`（6 案例）——面板本身都不在了，沒有東西可測。
+
+現況（獨立重跑確認）：核心測試 264／264（第 18 節基準 263，本輪淨增 1：刪 6 加 7）、Windows-adapter 測試 11／11、PackageBuilder 政策測試 29／29 全數通過；`LolPerformanceOverlay.Core`、`LolPerformanceOverlay`（WPF）兩個專案 Release 建置都是 0 警告／0 錯誤。
+
+### 文件同步
+
+`README.md`、`SECURITY.md` 原本把 OP.GG 連結講成「使用者主動開啟的普通瀏覽器連結」（技術上仍成立，但沒說清楚現在一次帶出整場玩家），這次改成明確提到展開面板標題列的 ↗ 按鈕、多人搜尋、每人都帶 Riot ID 標籤避免同名玩家連錯人；「程式不抓取頁面」的既有保證原文照留，沒有改動語意。本文件第 17 節「決策與捨棄的方案」與「本輪測試與 CI」兩處描述底部面板保留、`HistoricalPanelPresenterTests` 仍存在的敘述，已依既有慣例加上 `[狀態：...]` 標記指回這裡，沒有直接刪改原文。`docs/先看這裡.html` 目前仍描述「在瀏覽器開啟 OP.GG 首頁，自行搜尋」這個較舊、較保守的說法，還沒有更新成多人搜尋按鈕本身；這份檔案不在這次任務範圍內，先在這裡記錄成已知落差，留給下一次觸碰這份檔案的工作一併處理。
+
+### 尚未做
+
+- 尚未 push，因此沒有 CI 結果可以記錄，不能宣稱通過 release scan（敏感字串、開發者路徑、raw overlay 欄位、網域允許清單等只有 CI 會跑）。
+- 真機滑鼠：新按鈕搬進標題列後和 ⚙／— 是否好按、間距是否清楚、tooltip 是否即時出現，以及點下去之後瀏覽器分頁是否確實一次帶出整場玩家——都還沒有真機驗證。
+- Expanded 面板拿掉底部面板後的實際高度變化，沒有真機截圖比對前後差異。
+- `docs/先看這裡.html`「想自行查看公開資料」卡片仍是舊版措辭，見上方「文件同步」。

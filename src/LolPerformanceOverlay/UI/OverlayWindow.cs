@@ -68,9 +68,6 @@ public sealed class OverlayWindow : Window
     private TextBlock? _compactLeftDetail;
     private TextBlock? _compactRight;
     private TextBlock? _compactRightDetail;
-    private Border? _historyPanel;
-    private TextBlock? _historyMeta;
-    private TextBlock? _historyRecentForm;
     private Button? _opGgButton;
     private Uri? _opGgDestination;
     private bool _visualWasChampSelect;
@@ -79,7 +76,6 @@ public sealed class OverlayWindow : Window
     private DipPoint _dragWindowOrigin;
     private bool _clamping;
     private IntPtr _windowHandle;
-    private string? _platformRegion;
 
     public OverlayWindow(AppSettings settings)
     {
@@ -152,19 +148,6 @@ public sealed class OverlayWindow : Window
             UpdateVisibleControls(diff);
         }
         PresentationUpdateCount++;
-    }
-
-    public void SetPlatformRegion(string? platformRegion)
-    {
-        var normalized = PlatformRegionMapper.TryMap(platformRegion) ??
-                         (string.IsNullOrWhiteSpace(platformRegion) ? null : platformRegion.Trim().ToLowerInvariant());
-        if (string.Equals(_platformRegion, normalized, StringComparison.OrdinalIgnoreCase))
-        {
-            return;
-        }
-
-        _platformRegion = normalized;
-        UpdateHistoryControls();
     }
 
     public void ApplyHistoricalProfiles(HistoricalProfilesResult profiles)
@@ -264,8 +247,6 @@ public sealed class OverlayWindow : Window
         _compactLeftDetail = null;
         _compactRight = null;
         _compactRightDetail = null;
-        _historyMeta = null;
-        _historyRecentForm = null;
         _opGgButton = null;
         _visualWasChampSelect = _snapshot.Phase == LeaguePhase.ChampSelect;
 
@@ -363,25 +344,17 @@ public sealed class OverlayWindow : Window
 
     private UIElement BuildExpanded()
     {
-        // A fixed height cannot fit champ select, a live game, and the history panel
-        // in both its states without leaving dead space in the shortest of them. Let
-        // the content decide; ClampToWorkArea reads ActualHeight while this is on.
+        // A fixed height cannot fit champ select and a live game without leaving dead space in
+        // the shorter of the two. Let the content decide; ClampToWorkArea reads ActualHeight
+        // while this is on. The old bottom history block used to add a third, taller state to
+        // that same problem; removing it (see the header's OP.GG button) only shrank the range.
         Width = 520;
         SizeToContent = SizeToContent.Height;
         var root = Card();
         var layout = new DockPanel();
-        var header = BuildHeader(allowSettings: true);
+        var header = BuildHeader(allowSettings: true, allowOpGg: true);
         DockPanel.SetDock(header, Dock.Top);
         layout.Children.Add(header);
-
-        // Mounted but collapsed by default: UpdateHistoryControls only sets it Visible once a
-        // profile with real data exists, which only happens when the shipping provider is a
-        // live one (a Riot key is configured). No key -> PolicyDisabled entries -> no Profile
-        // -> stays Collapsed, satisfying the release criteria's "no provider means hidden or
-        // explicitly unavailable, never faked" requirement without a separate on/off switch here.
-        var history = BuildHistoryPanel();
-        DockPanel.SetDock(history, Dock.Bottom);
-        layout.Children.Add(history);
 
         var teamsGrid = new Grid { Margin = new Thickness(10, 0, 10, 8) };
         teamsGrid.ColumnDefinitions.Add(new ColumnDefinition());
@@ -400,7 +373,7 @@ public sealed class OverlayWindow : Window
         return root;
     }
 
-    private Border BuildHeader(bool allowSettings)
+    private Border BuildHeader(bool allowSettings, bool allowOpGg = false)
     {
         var border = new Border { Padding = new Thickness(14, 10, 10, 8) };
         var grid = new Grid();
@@ -444,52 +417,31 @@ public sealed class OverlayWindow : Window
             ? OverlayMode.Expanded
             : OverlayMode.Compact);
         buttons.Children.Add(switcher);
+
+        if (allowOpGg)
+        {
+            // Mounted but collapsed by default: UpdateHistoryControls only sets it Visible once
+            // a multi-search link can actually be built, which needs at least one revealed
+            // player's identity from _historicalProfiles. That is populated as soon as the
+            // in-game roster resolves -- with or without a configured Riot key, since even the
+            // no-key PolicyDisabledHistoricalProfileProvider still returns one entry per
+            // revealed player -- so the button appears whenever there is a live game to link to
+            // and stays hidden the rest of the time rather than reserving space for nothing.
+            _opGgButton = SmallButton("↗", "由你主動在瀏覽器開啟本場所有玩家的 OP.GG；Overlay 不讀回網頁資料");
+            _opGgButton.Click += (_, _) =>
+            {
+                if (_opGgDestination is not null)
+                {
+                    OpenExternalLinkRequested?.Invoke(_opGgDestination);
+                }
+            };
+            buttons.Children.Add(_opGgButton);
+        }
+
         Grid.SetColumn(buttons, 1);
         grid.Children.Add(buttons);
         border.Child = grid;
         return border;
-    }
-
-    private Border BuildHistoryPanel()
-    {
-        var panel = new Border
-        {
-            Margin = new Thickness(12, 2, 12, 5),
-            Padding = new Thickness(12, 9, 12, 9),
-            Background = new SolidColorBrush(Color.FromArgb(92, 35, 45, 62)),
-            BorderBrush = new SolidColorBrush(Color.FromArgb(110, 88, 112, 145)),
-            BorderThickness = new Thickness(1),
-            CornerRadius = new CornerRadius(9)
-        };
-        var grid = new Grid();
-        grid.ColumnDefinitions.Add(new ColumnDefinition());
-        grid.ColumnDefinitions.Add(new ColumnDefinition { Width = GridLength.Auto });
-        var text = new StackPanel();
-        text.Children.Add(Text("歷史近期狀態／風格（獨立資訊）", 12.5, "#DDE8F7", FontWeights.SemiBold));
-        // Rank used to live here too, but every row now carries its own official rank short
-        // code and tooltip (issues #7-#9), so this block only says what those rows do not:
-        // the local player's recent-form source, queue, sample count, fetch time, confidence
-        // and play style. See HistoricalPanelPresenter for the composed text.
-        _historyMeta = Text(string.Empty, 12.5, "#CBD6E7", FontWeights.Medium);
-        _historyRecentForm = Text(string.Empty, 12, "#B3C0D4");
-        text.Children.Add(_historyMeta);
-        text.Children.Add(_historyRecentForm);
-        grid.Children.Add(text);
-        _opGgButton = SmallButton("↗", "由你主動在瀏覽器開啟 OP.GG；Overlay 不讀回網頁資料");
-        _opGgButton.Width = 34;
-        _opGgButton.Height = 32;
-        _opGgButton.Click += (_, _) =>
-        {
-            if (_opGgDestination is not null)
-            {
-                OpenExternalLinkRequested?.Invoke(_opGgDestination);
-            }
-        };
-        Grid.SetColumn(_opGgButton, 1);
-        grid.Children.Add(_opGgButton);
-        panel.Child = grid;
-        _historyPanel = panel;
-        return panel;
     }
 
     private TeamView CreateTeamView()
@@ -778,10 +730,10 @@ public sealed class OverlayWindow : Window
             }
         }
 
-        if ((diff.Fields & OverlaySnapshotFields.ActiveRiotId) != 0)
-        {
-            UpdateHistoryControls();
-        }
+        // The OP.GG button no longer tracks a single active player (see UpdateHistoryControls),
+        // so it has nothing left to react to here -- it only changes when
+        // ApplyHistoricalProfiles/ClearHistoricalProfiles run, and both already call
+        // UpdateHistoryControls directly.
     }
 
     private void UpdateTeamView(
@@ -1088,96 +1040,37 @@ public sealed class OverlayWindow : Window
 
     private void UpdateHistoryControls()
     {
-        if (_historyMeta is null || _historyRecentForm is null || _opGgButton is null)
+        if (_opGgButton is null)
         {
             return;
         }
 
-        _opGgDestination = TryBuildActivePlayerLink();
+        _opGgDestination = TryBuildRosterLink();
+        // Collapsed, not Hidden: Expanded sizes to content (SizeToContent.Height), so Hidden
+        // would still reserve the button's layout space and hold the window a few pixels
+        // taller than it needs to be whenever there is nothing to link to yet (e.g. right at
+        // game start, before the first historical lookup lands) or nothing left to link to
+        // (e.g. EndOfGame, once ClearHistoricalProfiles runs).
         _opGgButton.Visibility = _opGgDestination is null ? Visibility.Collapsed : Visibility.Visible;
-        var display = HistoricalPanelPresenter.Describe(FindActiveHistoryEntry()?.Profile);
-        if (display.HasContent)
-        {
-            _historyMeta.Text = display.MetaText;
-            _historyRecentForm.Text = display.RecentFormText;
-            // Collapsed, not just an empty string: an empty TextBlock still reserves a line
-            // of height in the StackPanel, and a rank-only profile (no PlayStyle) has no
-            // style wording to show at all -- not even a sentence explaining the absence.
-            _historyRecentForm.Visibility = display.RecentFormText.Length == 0 ? Visibility.Collapsed : Visibility.Visible;
-            if (_historyPanel is not null)
-            {
-                _historyPanel.Visibility = Visibility.Visible;
-            }
-
-            return;
-        }
-
-        // No profile means the whole block has nothing to say, and the release criteria
-        // let the feature be hidden outright rather than shown as unavailable. Hiding it
-        // beats spending a permanent band on a panel that sits over a game. Collapsed, not
-        // Hidden: Expanded sizes to content (SizeToContent.Height), so Hidden would still
-        // reserve this block's layout space and hold the window at its tallest -- most
-        // visibly during EndOfGame, when the roster clears and there is nothing to show.
-        if (_historyPanel is not null)
-        {
-            _historyPanel.Visibility = Visibility.Collapsed;
-        }
     }
 
-    private HistoricalProfileEntry? FindActiveHistoryEntry()
+    // Builds one link for the whole revealed roster rather than the local player alone.
+    // _historicalProfiles.Entries carries a RevealedPlayerIdentity per revealed player
+    // regardless of provider -- including PolicyDisabledHistoricalProfileProvider, which is
+    // what ships when no Riot key is configured -- so this works with or without a key.
+    private Uri? TryBuildRosterLink()
     {
-        if (_historicalProfiles is null || string.IsNullOrWhiteSpace(_snapshot.ActiveRiotId))
+        if (_historicalProfiles is null || _historicalProfiles.Entries.Count == 0)
         {
             return null;
         }
 
-        return _historicalProfiles.Entries.FirstOrDefault(entry =>
-            string.Equals(
-                $"{entry.Identity.GameName}#{entry.Identity.TagLine}",
-                _snapshot.ActiveRiotId,
-                StringComparison.OrdinalIgnoreCase));
-    }
-
-    private Uri? TryBuildActivePlayerLink()
-    {
-        var identity = FindActiveHistoryEntry()?.Identity;
-        if (identity is null && !TryCreateActiveIdentity(out identity))
-        {
-            return null;
-        }
-
-        if (!OpGgProfileLinkBuilder.TryBuild(identity, out var action))
-        {
-            return null;
-        }
-
-        return action.Destination;
-    }
-
-    private bool TryCreateActiveIdentity(out RevealedPlayerIdentity identity)
-    {
-        identity = null!;
-        var riotId = _snapshot.ActiveRiotId;
-        if (string.IsNullOrWhiteSpace(riotId) || string.IsNullOrWhiteSpace(_platformRegion))
-        {
-            return false;
-        }
-
-        var separator = riotId.LastIndexOf('#');
-        if (separator <= 0 || separator == riotId.Length - 1)
-        {
-            return false;
-        }
-
-        var player = _snapshot.Teams.SelectMany(team => team.Players).FirstOrDefault(candidate =>
-            !candidate.IsAnonymous &&
-            string.Equals(candidate.DisplayName, riotId, StringComparison.OrdinalIgnoreCase));
-        return player is not null && RevealedPlayerIdentity.TryCreateNormallyRevealed(
-            player.StableKey,
-            riotId[..separator],
-            riotId[(separator + 1)..],
-            _platformRegion,
-            out identity);
+        var identities = _historicalProfiles.Entries
+            .Select(entry => entry.Identity)
+            .ToArray();
+        return OpGgProfileLinkBuilder.TryBuildMultiSearch(identities, out var action)
+            ? action.Destination
+            : null;
     }
 
     private void OnPointerDown(object sender, MouseButtonEventArgs e)
