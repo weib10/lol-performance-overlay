@@ -6,3 +6,8 @@ outputs/
 .vs/
 *.user
 *.suo
+
+# Screenshots dropped at the repo root while investigating. These are real game
+# captures: they contain other players' Riot IDs, which AGENTS.md keeps out of
+# the repository, fixtures and issues. Keep them local.
+Screen*.png
