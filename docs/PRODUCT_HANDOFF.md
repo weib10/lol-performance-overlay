@@ -511,7 +511,9 @@ P0 的架構性問題（長生命週期 UI、pointer state machine、snapshot �
 
 現況（本次審視時獨立重跑一次確認，不是只看 commit 訊息裡的數字）：核心測試 254／254、Windows-adapter 測試 11／11、PackageBuilder 政策測試 29／29 全數通過，三個測試專案的 Release build 都是 0 warning／0 error。`Tier`／`Division`／`LeaguePoints`／`OfficialRank`／`ShortCode` 等新名稱都不在 `eng/package-config.json` 的 `rawOverlayFieldNames` 阻擋清單內，本輪不需要放寬 gate，release scan 也沒有因為新欄位命名誤判。
 
-CI 狀態必須誠實記錄：這四個實作 commit（`96a3dc7`～`8884b60`）目前只存在於本機 `feature/per-player-rank` 分支，領先 `origin/main` 四個 commit、尚未 push，因此 CI 完全沒有在這幾個 commit 上跑過——本節之前的「本機建置與測試都過」只證明了 build 和 test，release scan 這道 gate 只有 CI 會跑。push 之後仍須依 AGENTS.md 的既有紀律回頭確認 CI 實際變綠，不能把這輪的本機驗證當成完成。
+CI 狀態必須誠實記錄。本節初次寫成時，這四個實作 commit 只存在於本機分支、尚未 push，因此 CI 完全沒有在它們身上跑過；「本機建置與測試都過」只證明了 build 和 test，release scan 這道 gate 只有 CI 會跑。
+
+[狀態：已完成，見第 18 節結尾] 後續連同 fallback 一起 push，並以 PR #12 觸發 CI。通過的 commit 是 `7b6912f`（run `32344465905`，`windows-latest`），`Build, test, scan, and package` 這一步成功，代表 release scan 也通過。
 
 ### 文件同步
 
@@ -543,7 +545,7 @@ CI 狀態必須誠實記錄：這四個實作 commit（`96a3dc7`～`8884b60`）�
 - 三種模式的真實滑鼠拖曳、click-through、位置鎖定，以及新牌位欄本身的 hover／tooltip 真機互動——都還沒做。
 - 多螢幕、不同 DPI、解析度切換下牌位欄與 tooltip 的實際呈現——都還沒驗證。
 - 真實對局的 CPU／記憶體／UI 更新延遲量測（現有數字仍是邏輯層 proxy，本輪新增的牌位欄與 tooltip 繪製成本同樣不在其中）。
-- 這四個實作 commit 尚未 push，CI 完全沒有在它們身上跑過；push 後必須實際確認 CI 綠燈並記錄通過的 commit，不能只憑本機 build／test 通過。
+- ~~這四個實作 commit 尚未 push，CI 完全沒有在它們身上跑過~~ [狀態：已完成] CI 已於 PR #12 通過，commit `7b6912f`、run `32344465905`，release scan 含在通過的步驟內。
 - 工作目錄裡未追蹤的 `Screen15.png`（見九角度審視第 1 點）建議在 push 前處理掉，避免被任何自動化或手動操作誤加進版本控制。
 - 兩台乾淨 Windows 環境的下載／安裝／完整對局／移除驗收、未參與開發的朋友測試——仍未開始。
 - `outputs/` 目錄若有舊 package，早於本輪所有變動，展示前需重新打包。
@@ -611,4 +613,8 @@ ARAM 以前完全不打 Riot API；現在每一場 ARAM 都會對每位有 Riot 
 
 現況（獨立重跑確認）：核心測試 263／263（第 17 節基準 254，第 18 節 fallback 本身淨增 7，這次 review 補漏再淨增 2）、Windows-adapter 測試 11／11、PackageBuilder 政策測試 29／29 全數通過；`LolPerformanceOverlay.Core`、`LolPerformanceOverlay`（WPF）兩個專案 `--no-incremental` 全新建置都是 0 警告／0 錯誤。`IsFromDifferentQueue`、`IsRankedLadder` 等新名稱同樣不在 `eng/package-config.json` 的 `rawOverlayFieldNames` 阻擋清單內，本輪不需要放寬 gate。`OfficialRankAttachment.Attach` 無變化回傳同一個 snapshot instance 的規則沒有被這次任何一項修改觸碰。
 
-尚未做、延續第 17 節既有清單的部分：這幾個 commit 尚未建立、尚未 push，CI 完全沒有在它們身上跑過；真機滑鼠 hover 是否能清楚看到點狀底線、tooltip 觸發是否順手——screen lock 環境下同樣未驗證，仍然是「未驗證」而不是「已通過」。
+### CI 結果
+
+第 17、18 節的所有工作以 `feature/per-player-rank` 分支 push，並由 PR #12 觸發 CI。通過的 commit 是 `7b6912f`，run `32344465905`，`windows-latest`；`Build, test, scan, and package` 這一步成功，代表本機沒有的 release scan（敏感字串、開發者路徑、raw overlay 欄位、網域允許清單、兩檔 ZIP 契約）也一併通過。這是 AGENTS.md 要求的「push 之後實際確認 CI 結果並記錄通過的 commit」，不是以本機建置與測試代替。
+
+尚未做、延續第 17 節既有清單的部分：真機滑鼠 hover 是否能清楚看到點狀底線、tooltip 觸發是否順手，以及牌位欄在不同 DPI 下是否清楚可讀——開發機在這輪作業中途鎖屏，之後無法截圖，因此仍然是「未驗證」而不是「已通過」。CI 綠燈證明的是建置、測試與掃描，不是畫面。
