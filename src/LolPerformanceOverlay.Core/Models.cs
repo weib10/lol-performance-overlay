@@ -62,23 +62,32 @@ public sealed record RawItemState(int ItemId, int Count, int GoldValue);
 /// <see cref="ShortCode"/> is deliberately terse -- the rank column is only 25px wide (see
 /// OverlayWindow.CreatePlayerRow) -- and collapses many different states into a handful of
 /// visual ones so ten rows of a distinct, obscure marker never reads as the app being broken:
-/// a real rank code ("D4", "GM"), "未" for a player unranked in a queue that has a ladder,
-/// a neutral "—" for every lookup failure, or an empty string for a queue with no ranked
-/// ladder at all (e.g. ARAM) -- OverlayWindow.UpdatePlayerRank already collapses the cell
-/// whenever the text is empty, and here that is the point: the concept has no value to show,
-/// on any player, in every game played in that queue. A trailing "*" on a non-empty code means
-/// the data is stale: a second, non-colour signal, because AGENTS.md forbids marking state by
-/// colour alone.
+/// a real rank code ("D4", "GM"), "未" for a player with no rank in the current queue, Solo,
+/// or Flex, or a neutral "—" for every lookup failure. A trailing "*" on a non-empty code
+/// means the data is stale: a second, non-colour signal, because AGENTS.md forbids marking
+/// state by colour alone.
+/// <see cref="IsFromDifferentQueue"/> is a third, independent non-colour signal: true only
+/// when the current queue itself has a ranked ladder (Solo or Flex) and the resolved rank
+/// above came from the *other* one -- e.g. a Flex rank shown while playing Solo, because the
+/// player has no Solo rank of their own. OverlayWindow renders it as a dotted underline on the
+/// rank cell (a shape distinction, not a colour one) so a fallback rank is never mistaken for
+/// a genuine same-queue rank sitting next to it on the same board. It is deliberately false
+/// for a queue with no ladder of its own (e.g. ARAM): every rank shown there is a fallback by
+/// construction, so a mark on every row would be the same one-glyph-for-everything clutter
+/// issue #8 already collapsed away -- the tooltip still names the true queue in that case, the
+/// row just does not carry a mark for it. See OfficialRankAttachment.FormatRank.
 /// <see cref="StatusText"/> is the fuller, friend-facing sentence behind that marker and stays
 /// fully distinct per state even where ShortCode does not -- empty only for a fresh resolved
-/// rank, which needs no further explanation.
+/// rank from the current queue (or a same-source fallback in a no-ladder queue), which needs
+/// no further explanation.
 /// <see cref="TooltipText"/> is the full row tooltip's official-rank block (issue #9): full
 /// tier name, LP when reported, the queue the rank belongs to, the source's display name, the
-/// fetch time, and staleness stated in words when <see cref="IsStale"/> -- composed once here
-/// in Core, never in the WPF adapter, so it is an observable string tests can assert directly.
-/// It always ends with an explicit sentence separating this rank (Riot's official data) from
-/// the row's score (this program's own reading of the current game), because that is exactly
-/// the distinction a player must never be able to blend together -- see AGENTS.md rule 9.
+/// fetch time, an explicit note when that queue is not the one currently being played, and
+/// staleness stated in words when <see cref="IsStale"/> -- composed once here in Core, never
+/// in the WPF adapter, so it is an observable string tests can assert directly. It always ends
+/// with an explicit sentence separating this rank (Riot's official data) from the row's score
+/// (this program's own reading of the current game), because that is exactly the distinction a
+/// player must never be able to blend together -- see AGENTS.md rule 9.
 /// It is a positional record with room for further trailing optional parameters so it can keep
 /// growing without reshaping callers, the same way <see cref="OverlayPlayer"/> itself grew
 /// <c>PickOrder</c> and <c>ItemGold</c>.
@@ -87,7 +96,8 @@ public sealed record OfficialRankDisplay(
     string ShortCode,
     string StatusText = "",
     bool IsStale = false,
-    string TooltipText = "");
+    string TooltipText = "",
+    bool IsFromDifferentQueue = false);
 
 public sealed record RawPlayerState(
     string StableKey,

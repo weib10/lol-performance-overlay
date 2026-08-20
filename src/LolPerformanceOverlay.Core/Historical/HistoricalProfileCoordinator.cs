@@ -569,12 +569,15 @@ public sealed class HistoricalProfileCoordinator : IHistoricalProfileProvider, I
             HistoricalProfileAvailability.Partial or HistoricalProfileAvailability.Stale) ||
             profile.Queue.QueueId != query.Queue.QueueId ||
             !string.Equals(profile.Queue.Mode, query.Queue.Mode, StringComparison.OrdinalIgnoreCase) ||
-            profile.OfficialRank is not null &&
-            (profile.OfficialRank.Queue.QueueId != profile.Queue.QueueId ||
-             !string.Equals(
-                 profile.OfficialRank.Queue.Mode,
-                 profile.Queue.Mode,
-                 StringComparison.OrdinalIgnoreCase)) ||
+            // The rank no longer has to match the profile's own Queue -- a fallback rank
+            // (e.g. a Flex rank shown for a Solo query, or either one shown for a no-ladder
+            // queue like ARAM) legitimately carries a different Queue than profile.Queue on
+            // purpose, so OfficialRankAttachment can tell the player the truth about where it
+            // came from. What still cannot be true is an OfficialRank pointing at a queue
+            // that is not a real ranked ladder at all -- RiotHistoricalProfileTransport only
+            // ever searches Solo and Flex entries, so anything else here is malformed data,
+            // not a legitimate fallback.
+            profile.OfficialRank is not null && !profile.OfficialRank.Queue.IsRankedLadder ||
             profile.FetchedAt > now + TimeSpan.FromMinutes(5) ||
             profile.Source.Kind == HistoricalSourceKind.None ||
             profile.CommonChampions.Any(champion => champion.SampleCount > profile.SampleCount) ||

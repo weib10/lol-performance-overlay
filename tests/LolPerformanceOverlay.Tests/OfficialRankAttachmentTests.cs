@@ -178,10 +178,11 @@ public sealed class OfficialRankAttachmentTests
         // The whole point of AGENTS.md rule 6 (白話) here: the 25px cell must never grow a new
         // distinct glyph every time a new failure reason is added. Every reachable display's
         // ShortCode must be one of exactly these -- a real rank code (with or without the stale
-        // suffix), unranked (with or without the stale suffix), the neutral failure marker, or
-        // empty (no ladder in this queue).
+        // suffix), unranked (with or without the stale suffix), or the neutral failure marker.
+        // There is no longer an empty-string state: a resolved profile always searches the
+        // current queue, Solo, and Flex before landing on Unranked instead.
         var displays = AllReachableDisplays().ToArray();
-        var allowedShortCodes = new HashSet<string>(StringComparer.Ordinal) { "D4", "D4*", "未", "未*", "—", "" };
+        var allowedShortCodes = new HashSet<string>(StringComparer.Ordinal) { "D4", "D4*", "未", "未*", "—" };
 
         Assert.All(displays, display => Assert.Contains(display.ShortCode, allowedShortCodes));
         // And the failure marker specifically must be shared by more than one state -- if this
@@ -202,67 +203,26 @@ public sealed class OfficialRankAttachmentTests
     }
 
     [Fact]
-    public void NoLadderQueueDoesNotClaimThePlayerIsUnplaced()
+    public void UnrankedIsTheSameFactWhetherTheCurrentQueueHasALadderOrNot()
     {
-        // ARAM has no ranked ladder at all -- this is exactly what the built-in replay fixture
-        // produces for it (Available profile, OfficialRank null, Queue.QueueId 450). Saying
-        // "unranked" here would falsely imply a ladder exists for this player to be unplaced on.
-        var noLadder = AttachSingle(NoRankEntry(1, HistoricalQueue.Aram));
-        var unranked = AttachSingle(NoRankEntry(2, HistoricalQueue.RankedSolo));
+        // RiotHistoricalProfileTransport now searches the current queue (when it has a
+        // ladder), Solo, and Flex before giving up -- so "no rank" is the same fact about the
+        // player (no Solo or Flex rank exists) whether they were mid-ARAM or mid-Solo when the
+        // lookup ran. Unlike before fallback existed, these two are no longer distinguishable
+        // states: same ShortCode, same StatusText. Only the tooltip differs, because it also
+        // (honestly) names whichever queue is actually being played.
+        var noLadderQueue = AttachSingle(NoRankEntry(1, HistoricalQueue.Aram));
+        var rankedQueue = AttachSingle(NoRankEntry(2, HistoricalQueue.RankedSolo));
 
-        Assert.NotEqual(unranked.ShortCode, noLadder.ShortCode);
-        Assert.DoesNotContain("未定位", noLadder.StatusText);
-        // Empty on purpose -- see OfficialRankDisplay's doc comment and
-        // OverlayWindow.UpdatePlayerRank, which collapses the cell whenever the text is empty:
-        // the concept has no value to show in a ladderless queue, on any player, ever, so a
-        // marker here would be clutter repeated on every row of every ARAM game.
-        Assert.Equal(string.Empty, noLadder.ShortCode);
-        Assert.False(noLadder.IsStale);
-    }
-
-    [Fact]
-    public void NoRankedLadderFailureReasonMatchesTheProfilePresentNoLadderDisplayExactly()
-    {
-        // The live transport reaches "no ladder" as a failure (Profile null, FailureReason
-        // NoRankedLadder -- see RiotHistoricalProfileTransport.FetchAsync), while the
-        // synthetic/replay fixture reaches the very same real-world fact with a Profile
-        // present and OfficialRank null (see NoRankEntry/HistoricalTestData.Profile). Both
-        // must land on an identical display -- not just an equally-empty ShortCode, but the
-        // exact same StatusText too -- otherwise a player would see different wording for the
-        // same fact depending on which code path happened to produce it.
-        var viaProfile = AttachSingle(NoRankEntry(1, HistoricalQueue.Aram));
-        var viaFailure = AttachSingle(FailureEntry(
-            2,
-            HistoricalProfileAvailability.Unavailable,
-            HistoricalFailureReason.NoRankedLadder));
-
-        Assert.Equal(viaProfile, viaFailure);
-        Assert.Equal(string.Empty, viaFailure.ShortCode);
-        Assert.NotEqual(string.Empty, viaFailure.StatusText);
-    }
-
-    [Fact]
-    public void NoRankedLadderFailureReasonIsNotLumpedInWithGenericUnavailable()
-    {
-        // Both share HistoricalProfileAvailability.Unavailable -- the honest availability is
-        // the same in both cases, there is truly nothing to serve -- but the reason is what
-        // must not lie. A broken provider (ProviderUnavailable, e.g. an unmapped region) still
-        // gets the generic failure marker and "temporarily busy" wording; a queue with no
-        // ladder at all must not, because nothing is actually broken.
-        var noLadder = AttachSingle(FailureEntry(
-            1,
-            HistoricalProfileAvailability.Unavailable,
-            HistoricalFailureReason.NoRankedLadder));
-        var genericUnavailable = AttachSingle(FailureEntry(
-            2,
-            HistoricalProfileAvailability.Unavailable,
-            HistoricalFailureReason.ProviderUnavailable));
-
-        Assert.Equal(string.Empty, noLadder.ShortCode);
-        Assert.Equal("—", genericUnavailable.ShortCode);
-        Assert.NotEqual(noLadder.StatusText, genericUnavailable.StatusText);
-        Assert.DoesNotContain("忙碌", noLadder.StatusText);
-        Assert.DoesNotContain("故障", noLadder.StatusText);
+        Assert.Equal(rankedQueue.ShortCode, noLadderQueue.ShortCode);
+        Assert.Equal(rankedQueue.StatusText, noLadderQueue.StatusText);
+        Assert.Equal(rankedQueue.IsStale, noLadderQueue.IsStale);
+        Assert.Equal("未", rankedQueue.ShortCode);
+        Assert.Contains("未定位", rankedQueue.StatusText);
+        // The tooltip still honestly names whichever queue is actually being played, so the two
+        // are not required to be byte-identical there.
+        Assert.Contains(HistoricalQueue.Aram.DisplayName, noLadderQueue.TooltipText);
+        Assert.Contains(HistoricalQueue.RankedSolo.DisplayName, rankedQueue.TooltipText);
     }
 
     [Fact]
@@ -280,20 +240,72 @@ public sealed class OfficialRankAttachmentTests
     }
 
     [Fact]
-    public void StaleUnrankedCarriesTheStaleMarkerButStaleNoLadderStaysCollapsed()
+    public void StaleUnrankedCarriesTheStaleMarkerRegardlessOfWhetherTheCurrentQueueHasALadder()
     {
         var staleUnranked = AttachSingle(NoRankEntry(1, HistoricalQueue.RankedSolo, HistoricalProfileAvailability.Stale));
-        var staleNoLadder = AttachSingle(NoRankEntry(2, HistoricalQueue.Aram, HistoricalProfileAvailability.Stale));
+        var staleNoLadderQueue = AttachSingle(NoRankEntry(2, HistoricalQueue.Aram, HistoricalProfileAvailability.Stale));
 
         Assert.True(staleUnranked.IsStale);
         Assert.Equal("未*", staleUnranked.ShortCode);
-        // IsStale is still recorded honestly on the no-ladder display (for #9's tooltip), but
-        // the cell itself stays empty even when stale: there is no value here to be old, so
-        // there is nothing for the "*" to be attached to -- a lone "*" floating in an otherwise
-        // empty row would be more confusing than informative.
-        Assert.True(staleNoLadder.IsStale);
-        Assert.Equal(string.Empty, staleNoLadder.ShortCode);
-        Assert.NotEqual(staleUnranked.ShortCode, staleNoLadder.ShortCode);
+        Assert.True(staleNoLadderQueue.IsStale);
+        Assert.Equal(staleUnranked.ShortCode, staleNoLadderQueue.ShortCode);
+        Assert.Equal(staleUnranked.StatusText, staleNoLadderQueue.StatusText);
+    }
+
+    [Fact]
+    public void FreshRankFromTheCurrentQueueCarriesNoCrossQueueMarkOrNote()
+    {
+        var display = AttachSingle(AvailableEntry(1, "DIAMOND", "IV"));
+
+        Assert.False(display.IsFromDifferentQueue);
+        Assert.Equal(string.Empty, display.StatusText);
+    }
+
+    [Fact]
+    public void FreshRankFromTheOtherRankedQueueCarriesTheCrossQueueMarkAndNote()
+    {
+        // A Flex rank surfacing on a Solo game's board (because this player has no Solo rank
+        // of their own) is exactly the case a bare "D4" next to genuine Solo ranks would misread
+        // as -- see FormatRank's isFromDifferentQueue.
+        var entry = CrossQueueEntry(1, currentQueue: HistoricalQueue.RankedSolo, rankQueue: HistoricalQueue.RankedFlex);
+
+        var display = AttachSingle(entry);
+
+        Assert.True(display.IsFromDifferentQueue);
+        Assert.NotEqual(string.Empty, display.StatusText);
+        Assert.Contains(HistoricalQueue.RankedFlex.DisplayName, display.StatusText);
+        Assert.Contains(HistoricalQueue.RankedSolo.DisplayName, display.StatusText);
+        Assert.Contains(HistoricalQueue.RankedFlex.DisplayName, display.TooltipText);
+        Assert.Contains(HistoricalQueue.RankedSolo.DisplayName, display.TooltipText);
+    }
+
+    [Fact]
+    public void FallbackRankInANoLadderQueueCarriesNoCellMarkButTheTooltipStillNamesTheTrueQueue()
+    {
+        // ARAM has no ladder of its own, so every rank shown there is a fallback by
+        // construction -- marking every row would be exactly the one-glyph-for-everything
+        // clutter issue #8 already collapsed away. The tooltip still tells the truth about
+        // which queue the rank actually came from.
+        var entry = CrossQueueEntry(1, currentQueue: HistoricalQueue.Aram, rankQueue: HistoricalQueue.RankedSolo);
+
+        var display = AttachSingle(entry);
+
+        Assert.False(display.IsFromDifferentQueue);
+        Assert.Equal(string.Empty, display.StatusText);
+        Assert.Contains(HistoricalQueue.RankedSolo.DisplayName, display.TooltipText);
+        Assert.Contains(HistoricalQueue.Aram.DisplayName, display.TooltipText);
+    }
+
+    [Fact]
+    public void CrossQueueMarkAppearsOnlyWhenTheCurrentQueueItselfHasARankedLadder()
+    {
+        var inRankedQueue = AttachSingle(
+            CrossQueueEntry(1, currentQueue: HistoricalQueue.RankedFlex, rankQueue: HistoricalQueue.RankedSolo));
+        var inNoLadderQueue = AttachSingle(
+            CrossQueueEntry(2, currentQueue: HistoricalQueue.Aram, rankQueue: HistoricalQueue.RankedSolo));
+
+        Assert.True(inRankedQueue.IsFromDifferentQueue);
+        Assert.False(inNoLadderQueue.IsFromDifferentQueue);
     }
 
     [Fact]
@@ -366,7 +378,7 @@ public sealed class OfficialRankAttachmentTests
     }
 
     [Fact]
-    public void AttachingTheSameMixOfRankedUnrankedNoLadderAndFailedProfilesTwiceProducesNoDiffOrReducerUpdate()
+    public void AttachingTheSameMixOfRankedUnrankedCrossQueueAndFailedProfilesTwiceProducesNoDiffOrReducerUpdate()
     {
         var profiles = ProfilesResult(
         [
@@ -376,7 +388,8 @@ public sealed class OfficialRankAttachmentTests
             FailureEntry(4, HistoricalProfileAvailability.NotFound, HistoricalFailureReason.RecordNotFound),
             FailureEntry(5, HistoricalProfileAvailability.RateLimited, HistoricalFailureReason.RequestThrottled),
             StaleEntry(6, "SILVER", "II"),
-            FailureEntry(7, HistoricalProfileAvailability.Unavailable, HistoricalFailureReason.NoRankedLadder)
+            CrossQueueEntry(7, currentQueue: HistoricalQueue.RankedFlex, rankQueue: HistoricalQueue.RankedSolo),
+            CrossQueueEntry(8, currentQueue: HistoricalQueue.Aram, rankQueue: HistoricalQueue.RankedFlex)
         ]);
         var first = OfficialRankAttachment.Attach(TenPlayerSnapshot(Now), profiles);
         var second = OfficialRankAttachment.Attach(TenPlayerSnapshot(Now.AddSeconds(1)), profiles);
@@ -560,19 +573,23 @@ public sealed class OfficialRankAttachmentTests
     }
 
     /// <summary>
-    /// One display per state this ticket must make distinguishable: a fresh rank, a stale
-    /// rank, unranked, no-ladder-queue (as reached via the synthetic/replay fixture's
-    /// profile-present shape -- see <see cref="NoRankedLadderFailureReasonMatchesTheProfilePresentNoLadderDisplayExactly"/>
-    /// below for the live transport's failure-shaped path onto the very same display), and
-    /// every lookup failure. Backs the no-jargon and marker-set assertions above so they cover
-    /// the whole surface area in one place instead of drifting out of sync with it.
+    /// One display per state this ticket must make distinguishable by StatusText: a fresh
+    /// same-queue rank, a stale rank, a fresh cross-queue fallback rank shown in a ranked
+    /// queue's own game, unranked, and every lookup failure. Backs the no-jargon and
+    /// marker-set assertions above so they cover the whole surface area in one place instead
+    /// of drifting out of sync with it. Deliberately does NOT also include a no-ladder-queue
+    /// unranked entry (HistoricalQueue.Aram) or a no-ladder-queue fallback entry: both are
+    /// indistinguishable from their ranked-queue counterparts on ShortCode and StatusText by
+    /// design now (see UnrankedIsTheSameFactWhetherTheCurrentQueueHasALadderOrNot and
+    /// FallbackRankInANoLadderQueueCarriesNoCellMarkButTheTooltipStillNamesTheTrueQueue), so
+    /// including them here would only duplicate an existing entry, not add a new state.
     /// </summary>
     private static IEnumerable<OfficialRankDisplay> AllReachableDisplays()
     {
         yield return AttachSingle(AvailableEntry(1, "DIAMOND", "IV"));
         yield return AttachSingle(StaleEntry(1, "DIAMOND", "IV"));
+        yield return AttachSingle(CrossQueueEntry(1, currentQueue: HistoricalQueue.RankedSolo, rankQueue: HistoricalQueue.RankedFlex));
         yield return AttachSingle(NoRankEntry(1, HistoricalQueue.RankedSolo));
-        yield return AttachSingle(NoRankEntry(1, HistoricalQueue.Aram));
         foreach (var scenario in FailureAvailabilities())
         {
             yield return AttachSingle(FailureEntry(
@@ -605,6 +622,29 @@ public sealed class OfficialRankAttachmentTests
             playStyle: null,
             new HistoricalProfileSource(HistoricalSourceKind.Synthetic, "合成測試資料"));
         return HistoricalProfileEntry.WithProfile(identity, availability, profile);
+    }
+
+    // Models exactly what RiotHistoricalProfileTransport's fallback now produces: a profile
+    // for currentQueue (the game actually being played) whose OfficialRank points at a
+    // different queue (rankQueue) -- e.g. a Flex rank surfacing on a Solo game's board, or a
+    // Solo/Flex rank surfacing in a no-ladder queue like ARAM.
+    private static HistoricalProfileEntry CrossQueueEntry(
+        int number,
+        HistoricalQueue currentQueue,
+        HistoricalQueue rankQueue)
+    {
+        var identity = HistoricalTestData.Player(number);
+        var profile = new HistoricalProfile(
+            currentQueue,
+            new OfficialRank(rankQueue, "DIAMOND", "IV", 42),
+            sampleCount: 0,
+            fetchedAt: Now,
+            HistoricalConfidence.InsufficientSample,
+            Array.Empty<HistoricalChampionUsage>(),
+            Array.Empty<HistoricalRoleUsage>(),
+            playStyle: null,
+            new HistoricalProfileSource(HistoricalSourceKind.Synthetic, "合成測試資料"));
+        return HistoricalProfileEntry.WithProfile(identity, HistoricalProfileAvailability.Available, profile);
     }
 
     private static HistoricalProfileEntry StaleEntry(int number, string tier, string division)

@@ -102,6 +102,16 @@ public sealed record HistoricalQueue
     public string Mode { get; }
     public string DisplayName { get; }
 
+    // The only two queues a rank can ever genuinely belong to -- RiotHistoricalProfileTransport
+    // only ever searches Solo and Flex entries (see FindPreferredEntry), whatever queue is
+    // actually being played. Shared by HistoricalProfileCoordinator.IsValid (an OfficialRank
+    // must point at one of these two, though not necessarily the profile's own Queue now that
+    // fallback exists -- see the "OfficialRank From..." coordinator tests) and by
+    // OfficialRankAttachment (only a ranked current queue -- one where this is true -- ever
+    // gets the cross-queue cell mark; a no-ladder queue like ARAM never does, because every
+    // rank shown there is a fallback by construction).
+    public bool IsRankedLadder => QueueId == RankedSolo.QueueId || QueueId == RankedFlex.QueueId;
+
     public static HistoricalQueue RankedSolo { get; } = new(420, "CLASSIC", "單雙排");
     public static HistoricalQueue RankedFlex { get; } = new(440, "CLASSIC", "彈性積分");
     public static HistoricalQueue Aram { get; } = new(450, "ARAM", "隨機單中");
@@ -134,13 +144,20 @@ public enum HistoricalFailureReason
     RequestThrottled,
     UpstreamFailure,
     RequestTimedOut,
-    InvalidResponse,
-    // The queue has no ranked ladder at all (e.g. ARAM) -- distinct from ProviderUnavailable
-    // on purpose. "No ladder exists for this queue" and "the source is broken right now" are
-    // different facts with different honest wording; collapsing them into one reason is what
-    // made RiotHistoricalProfileTransport's ARAM short-circuit lie to the presentation layer
-    // (see OfficialRankAttachment). See RiotHistoricalProfileTransport.FetchAsync.
-    NoRankedLadder
+    InvalidResponse
+    // NoRankedLadder (added for issue #8, removed here) used to mark "this queue has no
+    // ranked ladder at all" as distinct from ProviderUnavailable. It stopped being
+    // reachable the moment RiotHistoricalProfileTransport learned to fall back to Solo/Flex
+    // for a queue with no ladder of its own (e.g. ARAM) instead of failing outright -- the
+    // transport now always attempts a lookup, so "no ladder" alone is never again a reason a
+    // fetch cannot happen. What used to be a distinct "no ladder" cell state in
+    // OfficialRankAttachment folded into plain Unranked for the same reason: once the
+    // transport searches Solo and Flex regardless of the queue being played, "no rank in a
+    // queue with no ladder of its own" and "no rank in a queue that does have one" are the
+    // same fact about the player (no Solo or Flex rank exists), not two different ones. Kept
+    // out of the enum rather than left as a value nothing can ever produce -- see
+    // AGENTS.md rule 8 (可維護性與測試性) and the fallback-rank work item this removal is
+    // part of.
 }
 
 public enum HistoricalConfidence

@@ -40,6 +40,16 @@ public sealed class OverlayWindow : Window
     private const uint SwpFrameChanged = 0x0020;
     private static readonly ConcurrentDictionary<string, SolidColorBrush> BrushesByHex =
         new(StringComparer.OrdinalIgnoreCase);
+    // The rank cell's cross-queue mark (see OfficialRankDisplay.IsFromDifferentQueue): a
+    // dotted underline in the rank text's own colour, not a new one -- AGENTS.md rule 6
+    // forbids marking state by colour alone, and a dotted underline is a shape distinction
+    // that costs zero extra width, so the rank column's existing 25px budget (already proven
+    // to fit the longest real code, "GM*") never has to grow, and the champion name column
+    // next to it is untouched. It also happens to be the same convention browsers and wikis
+    // already use for "there is more detail on hover" (e.g. <abbr title="">), which is
+    // exactly what this is -- the row tooltip spells out which queue the rank actually came
+    // from (see UpdateRowTooltip/OfficialRankDisplay.TooltipText).
+    private static readonly TextDecorationCollection CrossQueueRankDecorations = BuildCrossQueueRankDecorations();
 
     private readonly AppSettings _settings;
     private readonly ChampionImageCache _imageCache = new();
@@ -535,6 +545,17 @@ public sealed class OverlayWindow : Window
         // avatar 34->28, meta 42->38, score 46->34 (each still comfortably fits its longest
         // real value -- three digits, "#10", "99.9k"), freeing exactly the width the new
         // rank column needs so the champion name's share of the row is unchanged.
+        //
+        // These five widths are unchanged again here for the cross-queue fallback mark (see
+        // OfficialRankDisplay.IsFromDifferentQueue): a dotted underline is a TextDecoration on
+        // the existing rank TextBlock, not additional characters, so it costs no horizontal
+        // space at all. Worked from BuildExpanded/CreateTeamView: window 520px, teamsGrid
+        // Margin(10,0,10,8) leaves 500px for two team columns plus a 12px gutter, so each team
+        // column is (500-12)/2 = 244px; the team card's Padding(7) leaves 244-14 = 230px; this
+        // row's own Padding(4,0,5,0) leaves 230-9 = 221px; the four OTHER fixed columns
+        // (28+38+25+34 = 125px) leave the champion column exactly 221-125 = 96px, same as
+        // before this change, because the rank column's own 25px did not move. See
+        // CrossQueueRankDecorations and UpdatePlayerRank.
         grid.ColumnDefinitions.Add(new ColumnDefinition { Width = new GridLength(28) });
         grid.ColumnDefinitions.Add(new ColumnDefinition());
         grid.ColumnDefinitions.Add(new ColumnDefinition { Width = new GridLength(38) });
@@ -902,13 +923,41 @@ public sealed class OverlayWindow : Window
     /// resolved rank yet (never fetched, unranked, lookup failed) leaves the cell blank
     /// rather than showing a word here -- the human-readable status lives in the row's
     /// tooltip instead (see UpdateRowTooltip/OfficialRankDisplay.TooltipText), where it has
-    /// room to be a full sentence instead of a 25px-wide word.
+    /// room to be a full sentence instead of a 25px-wide word. A dotted underline is added
+    /// when Core says this rank is a Solo/Flex fallback shown in a ranked queue's own game
+    /// (see OfficialRankDisplay.IsFromDifferentQueue and CrossQueueRankDecorations above) --
+    /// never for a no-ladder queue like ARAM, where every rank is a fallback and a mark on
+    /// every row would just be noise.
     /// </summary>
     private static void UpdatePlayerRank(PlayerRowView view, OverlayPlayer player)
     {
         var text = player.OfficialRank?.ShortCode ?? string.Empty;
         view.Rank.Text = text;
         view.Rank.Visibility = text.Length == 0 ? Visibility.Collapsed : Visibility.Visible;
+        view.Rank.TextDecorations = player.OfficialRank?.IsFromDifferentQueue == true
+            ? CrossQueueRankDecorations
+            : null;
+    }
+
+    // A dotted (not solid) underline, in the rank text's own gold rather than a new colour, so
+    // it reads as a shape/pattern distinction, not a colour-only one. Frozen once at startup --
+    // TextDecorationCollection is shared by every row, never mutated per-player.
+    private static TextDecorationCollection BuildCrossQueueRankDecorations()
+    {
+        // Offset and thickness are both literal pixels (not FontRecommended, which would scale
+        // with the 12.5pt rank font unpredictably): 1px further below the text than a default
+        // underline, 1px thick. At 12.5pt the rank text's own line height is roughly 17px, so
+        // glyph plus underline together stay well inside the 34px row -- there was already
+        // several pixels of unused space below a single line of 12.5pt text in a 34px row
+        // before this, and the underline only needs one more.
+        var pen = new Pen(Brush("#D9B36C"), 1) { DashStyle = DashStyles.Dot };
+        pen.Freeze();
+        var decorations = new TextDecorationCollection
+        {
+            new TextDecoration(TextDecorationLocation.Underline, pen, 1, TextDecorationUnit.Pixel, TextDecorationUnit.Pixel)
+        };
+        decorations.Freeze();
+        return decorations;
     }
 
     private void UpdatePlayerRow(

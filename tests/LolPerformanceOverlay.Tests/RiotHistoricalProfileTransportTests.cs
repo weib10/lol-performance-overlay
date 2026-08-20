@@ -10,8 +10,11 @@ public sealed class RiotHistoricalProfileTransportTests
     private static readonly DateTimeOffset Now = new(2026, 8, 17, 9, 0, 0, TimeSpan.Zero);
 
     [Fact]
-    public async Task SoloRankIsResolvedThroughAccountLookupThenFilteredByQueueType()
+    public async Task CurrentQueueRankIsPreferredOverSoloAndFlexWhenAllAreAvailable()
     {
+        // The response lists Flex before Solo on purpose: Array order must not matter, only
+        // preference order does, and the query below is for Solo -- its own ladder -- so Solo
+        // must win even though it appears second in the response.
         var handler = new FakeRiotHandler(request =>
         {
             if (request.RequestUri!.Host == "asia.api.riotgames.com")
@@ -44,10 +47,184 @@ public sealed class RiotHistoricalProfileTransportTests
         Assert.Equal("DIAMOND", profile.OfficialRank!.Tier);
         Assert.Equal("III", profile.OfficialRank.Division);
         Assert.Equal(42, profile.OfficialRank.LeaguePoints);
+        Assert.Equal(HistoricalQueue.RankedSolo.QueueId, profile.OfficialRank.Queue.QueueId);
         Assert.Null(profile.PlayStyle);
         Assert.Equal(0, profile.SampleCount);
         Assert.Equal(HistoricalConfidence.InsufficientSample, profile.Confidence);
         Assert.Equal(HistoricalSourceKind.LiveBackend, profile.Source.Kind);
+        Assert.Equal(2, handler.CallCount);
+    }
+
+    [Fact]
+    public async Task CurrentQueueRankIsPreferredEvenWhenTheGenericSoloFirstOrderWouldPickTheOtherOne()
+    {
+        // The current queue is Flex here, so Flex must win over Solo even though Solo comes
+        // first in the generic (current-less) fallback order -- proving "current queue" beats
+        // "Solo first", not just that Solo happens to win because it usually is the current one.
+        var handler = new FakeRiotHandler(request => request.RequestUri!.Host == "asia.api.riotgames.com"
+            ? Json(200, """{"puuid":"p"}""")
+            : Json(200, """
+                [
+                  {"queueType":"RANKED_SOLO_5x5","tier":"GOLD","rank":"I","leaguePoints":10},
+                  {"queueType":"RANKED_FLEX_SR","tier":"DIAMOND","rank":"III","leaguePoints":42}
+                ]
+                """));
+
+        using var transport = CreateTransport(handler);
+        var result = await transport.FetchAsync(
+            Player("A", "TW1", "tw2"),
+            new HistoricalProfileQuery(HistoricalQueue.RankedFlex),
+            CancellationToken.None);
+
+        var profile = result.Profile!;
+        Assert.Equal("DIAMOND", profile.OfficialRank!.Tier);
+        Assert.Equal(HistoricalQueue.RankedFlex.QueueId, profile.OfficialRank.Queue.QueueId);
+        Assert.Equal(2, handler.CallCount);
+    }
+
+    [Fact]
+    public async Task SoloRankIsUsedAsFallbackWhenTheCurrentQueueHasNoEntry()
+    {
+        var handler = new FakeRiotHandler(request => request.RequestUri!.Host == "asia.api.riotgames.com"
+            ? Json(200, """{"puuid":"p"}""")
+            : Json(200, """[{"queueType":"RANKED_SOLO_5x5","tier":"GOLD","rank":"I","leaguePoints":15}]"""));
+
+        using var transport = CreateTransport(handler);
+        var result = await transport.FetchAsync(
+            Player("A", "TW1", "tw2"),
+            new HistoricalProfileQuery(HistoricalQueue.RankedFlex),
+            CancellationToken.None);
+
+        Assert.Equal(HistoricalProfileAvailability.Available, result.Availability);
+        var profile = result.Profile!;
+        Assert.Equal("GOLD", profile.OfficialRank!.Tier);
+        // The rank is honestly labelled with the queue it actually came from, not the queue
+        // that was queried -- profile.Queue stays Flex (the game being played) while the rank
+        // itself carries Solo.
+        Assert.Equal(HistoricalQueue.RankedFlex.QueueId, profile.Queue.QueueId);
+        Assert.Equal(HistoricalQueue.RankedSolo.QueueId, profile.OfficialRank.Queue.QueueId);
+        Assert.Equal(2, handler.CallCount);
+    }
+
+    [Fact]
+    public async Task FlexRankIsUsedAsFallbackWhenNeitherTheCurrentQueueNorSoloHasAnEntry()
+    {
+        var handler = new FakeRiotHandler(request => request.RequestUri!.Host == "asia.api.riotgames.com"
+            ? Json(200, """{"puuid":"p"}""")
+            : Json(200, """[{"queueType":"RANKED_FLEX_SR","tier":"GOLD","rank":"I","leaguePoints":0}]"""));
+
+        using var transport = CreateTransport(handler);
+        var result = await transport.FetchAsync(
+            Player("A", "TW1", "tw2"),
+            new HistoricalProfileQuery(HistoricalQueue.RankedSolo),
+            CancellationToken.None);
+
+        Assert.Equal(HistoricalProfileAvailability.Available, result.Availability);
+        var profile = result.Profile!;
+        Assert.Equal(HistoricalQueue.RankedSolo.QueueId, profile.Queue.QueueId);
+        Assert.Equal(HistoricalQueue.RankedFlex.QueueId, profile.OfficialRank!.Queue.QueueId);
+        Assert.Equal(2, handler.CallCount);
+    }
+
+    [Fact]
+    public async Task ANoLadderQueueFallsBackToTheSoloRankInsteadOfFailing()
+    {
+        // ARAM has no ladder of its own, so the preference order simply starts at Solo -- and
+        // now actually makes the two HTTP calls instead of short-circuiting before either.
+        var handler = new FakeRiotHandler(request => request.RequestUri!.Host == "asia.api.riotgames.com"
+            ? Json(200, """{"puuid":"p"}""")
+            : Json(200, """[{"queueType":"RANKED_SOLO_5x5","tier":"PLATINUM","rank":"II","leaguePoints":33}]"""));
+
+        using var transport = CreateTransport(handler);
+        var result = await transport.FetchAsync(
+            Player("A", "TW1", "tw2"),
+            new HistoricalProfileQuery(HistoricalQueue.Aram),
+            CancellationToken.None);
+
+        Assert.Equal(HistoricalProfileAvailability.Available, result.Availability);
+        var profile = result.Profile!;
+        Assert.Equal(HistoricalQueue.Aram.QueueId, profile.Queue.QueueId);
+        Assert.Equal("PLATINUM", profile.OfficialRank!.Tier);
+        Assert.Equal(HistoricalQueue.RankedSolo.QueueId, profile.OfficialRank.Queue.QueueId);
+        Assert.Equal(2, handler.CallCount);
+    }
+
+    [Fact]
+    public async Task ANoLadderQueueFallsBackToTheFlexRankWhenNoSoloEntryExists()
+    {
+        var handler = new FakeRiotHandler(request => request.RequestUri!.Host == "asia.api.riotgames.com"
+            ? Json(200, """{"puuid":"p"}""")
+            : Json(200, """[{"queueType":"RANKED_FLEX_SR","tier":"SILVER","rank":"IV","leaguePoints":5}]"""));
+
+        using var transport = CreateTransport(handler);
+        var result = await transport.FetchAsync(
+            Player("A", "TW1", "tw2"),
+            new HistoricalProfileQuery(HistoricalQueue.Aram),
+            CancellationToken.None);
+
+        Assert.Equal(HistoricalProfileAvailability.Available, result.Availability);
+        var profile = result.Profile!;
+        Assert.Equal(HistoricalQueue.Aram.QueueId, profile.Queue.QueueId);
+        Assert.Equal("SILVER", profile.OfficialRank!.Tier);
+        Assert.Equal(HistoricalQueue.RankedFlex.QueueId, profile.OfficialRank.Queue.QueueId);
+        // Worst case for the "only one league-entries request" guarantee: this player has
+        // three misses (own queue has no ladder, then Solo) before the Flex hit, and it must
+        // still be exactly the one response already fetched, not a third HTTP call.
+        Assert.Equal(2, handler.CallCount);
+    }
+
+    [Fact]
+    public async Task AResolvedAccountWithNoEntryAnywhereInThePreferenceOrderIsAnAvailableUnrankedProfileNotAFailure()
+    {
+        // ACCOUNT-V1 found this exact player -- the account genuinely exists -- and LEAGUE-V4
+        // answered with their entries; there just are none. That is "unranked in Solo and
+        // Flex", a normal fact about the player, not a failed lookup: it must come back as an
+        // Available profile with a null OfficialRank (which OfficialRankAttachment.Describe
+        // renders as "未" / 尚未定位), never as NotFound/RecordNotFound -- that failure marker
+        // is reserved for when the account itself cannot be resolved (see
+        // RiotIdNotFoundStopsBeforeAnyLeagueLookup right below this test).
+        var handler = new FakeRiotHandler(request => request.RequestUri!.Host == "asia.api.riotgames.com"
+            ? Json(200, """{"puuid":"p"}""")
+            : Json(200, "[]"));
+
+        using var transport = CreateTransport(handler);
+        var result = await transport.FetchAsync(
+            Player("A", "TW1", "tw2"),
+            new HistoricalProfileQuery(HistoricalQueue.RankedSolo),
+            CancellationToken.None);
+
+        Assert.Equal(HistoricalProfileAvailability.Available, result.Availability);
+        var profile = result.Profile!;
+        Assert.Null(profile.OfficialRank);
+        Assert.Equal(HistoricalQueue.RankedSolo.QueueId, profile.Queue.QueueId);
+        // A rank-only lookup with nothing behind it -- honest, not invented, filler.
+        Assert.Equal(0, profile.SampleCount);
+        Assert.Equal(HistoricalConfidence.InsufficientSample, profile.Confidence);
+        Assert.Null(profile.PlayStyle);
+        Assert.Empty(profile.CommonChampions);
+        Assert.Empty(profile.CommonRoles);
+        Assert.Equal(2, handler.CallCount);
+    }
+
+    [Fact]
+    public async Task AResolvedAccountWithOnlyUnrelatedQueueEntriesIsAlsoAnAvailableUnrankedProfile()
+    {
+        // Same fact as an empty array, reached a different way: the account has ranked
+        // entries, just none that FindPreferredEntry's preference order (this queue's own
+        // ladder, then Solo, then Flex) ever matches. TFT's double-up queue is a real Riot
+        // queueType this endpoint can report that is neither Solo nor Flex.
+        var handler = new FakeRiotHandler(request => request.RequestUri!.Host == "asia.api.riotgames.com"
+            ? Json(200, """{"puuid":"p"}""")
+            : Json(200, """[{"queueType":"RANKED_TFT_DOUBLE_UP","tier":"GOLD","rank":"I","leaguePoints":10}]"""));
+
+        using var transport = CreateTransport(handler);
+        var result = await transport.FetchAsync(
+            Player("A", "TW1", "tw2"),
+            new HistoricalProfileQuery(HistoricalQueue.RankedSolo),
+            CancellationToken.None);
+
+        Assert.Equal(HistoricalProfileAvailability.Available, result.Availability);
+        Assert.Null(result.Profile!.OfficialRank);
         Assert.Equal(2, handler.CallCount);
     }
 
@@ -72,26 +249,13 @@ public sealed class RiotHistoricalProfileTransportTests
     }
 
     [Fact]
-    public async Task UnrankedInTheRequestedQueueIsNotFoundNotAnError()
-    {
-        var handler = new FakeRiotHandler(request => request.RequestUri!.Host == "asia.api.riotgames.com"
-            ? Json(200, """{"puuid":"p"}""")
-            : Json(200, """[{"queueType":"RANKED_FLEX_SR","tier":"GOLD","rank":"I","leaguePoints":0}]"""));
-
-        using var transport = CreateTransport(handler);
-        var result = await transport.FetchAsync(
-            Player("A", "TW1", "tw2"),
-            new HistoricalProfileQuery(HistoricalQueue.RankedSolo),
-            CancellationToken.None);
-
-        Assert.Equal(HistoricalProfileAvailability.NotFound, result.Availability);
-        Assert.Equal(HistoricalFailureReason.RecordNotFound, result.FailureReason);
-        Assert.Null(result.Profile);
-    }
-
-    [Fact]
     public async Task RiotIdNotFoundStopsBeforeAnyLeagueLookup()
     {
+        // The only remaining path to NotFound/RecordNotFound: ACCOUNT-V1 itself could not
+        // resolve this Riot ID, so there is no account to have ranked entries at all -- a
+        // genuinely different claim from "the account resolved but has no Solo/Flex rank"
+        // (see AResolvedAccountWithNoEntryAnywhereInThePreferenceOrderIsAnAvailableUnrankedProfileNotAFailure
+        // above), which is why this one stops before the league lookup even starts.
         var handler = new FakeRiotHandler(_ => Json(404, "{}"));
 
         using var transport = CreateTransport(handler);
@@ -212,26 +376,6 @@ public sealed class RiotHistoricalProfileTransportTests
             CancellationToken.None);
 
         Assert.Equal(HistoricalProfileAvailability.Malformed, result.Availability);
-    }
-
-    [Fact]
-    public async Task NonRankedQueueShortCircuitsWithoutAnyHttpCall()
-    {
-        var handler = new FakeRiotHandler(_ => throw new InvalidOperationException(
-            "ARAM has no ranked ladder; the transport must not call out for it."));
-
-        using var transport = CreateTransport(handler);
-        var result = await transport.FetchAsync(
-            Player("A", "TW1", "tw2"),
-            new HistoricalProfileQuery(HistoricalQueue.Aram),
-            CancellationToken.None);
-
-        Assert.Equal(HistoricalProfileAvailability.Unavailable, result.Availability);
-        // Distinct from ProviderUnavailable on purpose -- a queue with no ranked ladder is a
-        // different fact from a broken source, and OfficialRankAttachment depends on this
-        // reason (not availability alone) to avoid telling the player the source is down.
-        Assert.Equal(HistoricalFailureReason.NoRankedLadder, result.FailureReason);
-        Assert.Equal(0, handler.CallCount);
     }
 
     [Fact]

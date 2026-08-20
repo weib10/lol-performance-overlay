@@ -309,30 +309,40 @@ public sealed class HistoricalCoordinatorTests
     }
 
     [Fact]
-    public async Task NoRankedLadderReasonSurvivesTheCoordinatorUnchanged()
+    public async Task AramQueryWithAFallbackRankCachesAndDedupesLikeAnyOtherQueue()
     {
-        // Pins the whole chain, not just the transport: IsValid must not reject an
-        // Unavailable/no-profile result (it does not -- Unavailable is not one of the three
-        // availabilities IsValid requires a profile for), and nothing between the transport
-        // and the entry may fall back to substituting ProviderUnavailable for it the way the
-        // stale-not-allowed branch does for a genuinely unset reason. If this regresses, a
-        // real ARAM game goes back to telling players the data source is broken.
+        // ARAM no longer short-circuits at the transport -- it is just another queue value as
+        // far as the coordinator is concerned, and a profile for it can legitimately carry a
+        // Solo/Flex OfficialRank (see the coordinator's own IsValid). Pins that the ordinary
+        // cache/dedup pipeline still applies unchanged: a second request for the same player
+        // and queue is served from cache, not a second transport call.
         var clock = new HistoricalManualTimeProvider(Now);
-        var transport = new RecordingHistoricalTransport((_, _, _) =>
-            Task.FromResult(HistoricalProfileTransportResult.Failure(
-                HistoricalProfileAvailability.Unavailable,
-                HistoricalFailureReason.NoRankedLadder)));
+        var transport = new RecordingHistoricalTransport((player, query, _) =>
+            Task.FromResult(HistoricalProfileTransportResult.WithProfile(
+                HistoricalProfileAvailability.Available,
+                new HistoricalProfile(
+                    query.Queue,
+                    new OfficialRank(HistoricalQueue.RankedSolo, "GOLD", "II", 15),
+                    0,
+                    clock.GetUtcNow(),
+                    HistoricalConfidence.InsufficientSample,
+                    Array.Empty<HistoricalChampionUsage>(),
+                    Array.Empty<HistoricalRoleUsage>(),
+                    null,
+                    new HistoricalProfileSource(HistoricalSourceKind.LiveBackend, "合成 transport fixture")))));
         using var coordinator = CreateCoordinator(transport, clock);
+        var player = HistoricalTestData.Player(63);
+        var query = new HistoricalProfileQuery(HistoricalQueue.Aram);
 
-        var result = await coordinator.GetProfilesAsync(
-            [HistoricalTestData.Player(63)],
-            new HistoricalProfileQuery(HistoricalQueue.Aram),
-            CancellationToken.None);
+        var first = await coordinator.GetProfilesAsync([player], query, CancellationToken.None);
+        var second = await coordinator.GetProfilesAsync([player], query, CancellationToken.None);
 
-        var entry = Assert.Single(result.Entries);
-        Assert.Equal(HistoricalProfileAvailability.Unavailable, entry.Availability);
-        Assert.Equal(HistoricalFailureReason.NoRankedLadder, entry.FailureReason);
-        Assert.Null(entry.Profile);
+        var entry = Assert.Single(first.Entries);
+        Assert.Equal(HistoricalProfileAvailability.Available, entry.Availability);
+        Assert.Equal(HistoricalQueue.Aram.QueueId, entry.Profile!.Queue.QueueId);
+        Assert.Equal(HistoricalQueue.RankedSolo.QueueId, entry.Profile.OfficialRank!.Queue.QueueId);
+        Assert.Equal(HistoricalProfileAvailability.Available, Assert.Single(second.Entries).Availability);
+        Assert.Equal(1, transport.CallCount);
     }
 
     [Fact]
@@ -361,15 +371,19 @@ public sealed class HistoricalCoordinatorTests
     }
 
     [Fact]
-    public async Task OfficialRankFromDifferentQueueIsRejectedAsMalformed()
+    public async Task OfficialRankFromANonLadderQueueIsRejectedAsMalformed()
     {
+        // Unlike the other real ranked ladder (see the fallback test right below this one), a
+        // queue that is not a ranked ladder at all (ARAM here) can never legitimately be what
+        // an OfficialRank points at -- RiotHistoricalProfileTransport only ever searches Solo
+        // and Flex entries, so this can only be malformed data, not a fallback.
         var clock = new HistoricalManualTimeProvider(Now);
         var transport = new RecordingHistoricalTransport((player, query, _) =>
         {
             var valid = HistoricalTestData.Profile(player, query.Queue, clock.GetUtcNow());
             var mismatched = new HistoricalProfile(
                 valid.Queue,
-                new OfficialRank(HistoricalQueue.RankedFlex, "SILVER", "II", 42),
+                new OfficialRank(HistoricalQueue.Aram, "SILVER", "II", 42),
                 valid.SampleCount,
                 valid.FetchedAt,
                 valid.Confidence,
@@ -392,6 +406,84 @@ public sealed class HistoricalCoordinatorTests
         Assert.Equal(HistoricalProfileAvailability.Malformed, entry.Availability);
         Assert.Null(entry.Profile);
         Assert.Equal(0, coordinator.CacheCount);
+    }
+
+    [Fact]
+    public async Task OfficialRankFromTheOtherRankedLadderIsAcceptedAsALegitimateFallback()
+    {
+        // A Solo query whose OfficialRank actually carries Flex is exactly what the fallback
+        // feature produces when the player has no Solo rank -- IsValid must accept it, not
+        // reject it the way it used to before fallback existed.
+        var clock = new HistoricalManualTimeProvider(Now);
+        var transport = new RecordingHistoricalTransport((player, query, _) =>
+        {
+            var valid = HistoricalTestData.Profile(player, query.Queue, clock.GetUtcNow());
+            var fallback = new HistoricalProfile(
+                valid.Queue,
+                new OfficialRank(HistoricalQueue.RankedFlex, "SILVER", "II", 42),
+                valid.SampleCount,
+                valid.FetchedAt,
+                valid.Confidence,
+                valid.CommonChampions,
+                valid.CommonRoles,
+                valid.PlayStyle,
+                valid.Source);
+            return Task.FromResult(HistoricalProfileTransportResult.WithProfile(
+                HistoricalProfileAvailability.Available,
+                fallback));
+        });
+        using var coordinator = CreateCoordinator(transport, clock);
+
+        var result = await coordinator.GetProfilesAsync(
+            [HistoricalTestData.Player(67)],
+            new HistoricalProfileQuery(HistoricalQueue.RankedSolo),
+            CancellationToken.None);
+
+        var entry = Assert.Single(result.Entries);
+        Assert.Equal(HistoricalProfileAvailability.Available, entry.Availability);
+        Assert.Equal(HistoricalQueue.RankedSolo.QueueId, entry.Profile!.Queue.QueueId);
+        Assert.Equal(HistoricalQueue.RankedFlex.QueueId, entry.Profile.OfficialRank!.Queue.QueueId);
+        Assert.Equal(1, coordinator.CacheCount);
+    }
+
+    [Fact]
+    public async Task AnAvailableProfileWithNoOfficialRankPassesValidationAndCaches()
+    {
+        // Pins the exact shape RiotHistoricalProfileTransport.FetchAsync now produces when an
+        // account resolves but has no entry anywhere in the preference order: OfficialRank
+        // null, SampleCount 0, Confidence InsufficientSample, no champions/roles, no
+        // PlayStyle. IsValid's OfficialRank check (profile.OfficialRank is not null && ...)
+        // already short-circuits past a null rank, but the zero-sample/confidence pairing is a
+        // separate branch of the same validation chain -- verified here rather than assumed,
+        // since a zero-sample profile with the wrong confidence would be rejected as
+        // malformed by the "SampleCount < 5 must mean InsufficientSample" check.
+        var clock = new HistoricalManualTimeProvider(Now);
+        var transport = new RecordingHistoricalTransport((player, query, _) =>
+            Task.FromResult(HistoricalProfileTransportResult.WithProfile(
+                HistoricalProfileAvailability.Available,
+                new HistoricalProfile(
+                    query.Queue,
+                    null,
+                    0,
+                    clock.GetUtcNow(),
+                    HistoricalConfidence.InsufficientSample,
+                    Array.Empty<HistoricalChampionUsage>(),
+                    Array.Empty<HistoricalRoleUsage>(),
+                    null,
+                    new HistoricalProfileSource(HistoricalSourceKind.LiveBackend, "合成 transport fixture")))));
+        using var coordinator = CreateCoordinator(transport, clock);
+        var player = HistoricalTestData.Player(68);
+        var query = new HistoricalProfileQuery(HistoricalQueue.RankedSolo);
+
+        var first = await coordinator.GetProfilesAsync([player], query, CancellationToken.None);
+        var second = await coordinator.GetProfilesAsync([player], query, CancellationToken.None);
+
+        var entry = Assert.Single(first.Entries);
+        Assert.Equal(HistoricalProfileAvailability.Available, entry.Availability);
+        Assert.Null(entry.Profile!.OfficialRank);
+        Assert.Equal(HistoricalProfileAvailability.Available, Assert.Single(second.Entries).Availability);
+        Assert.Equal(1, transport.CallCount);
+        Assert.Equal(1, coordinator.CacheCount);
     }
 
     [Fact]

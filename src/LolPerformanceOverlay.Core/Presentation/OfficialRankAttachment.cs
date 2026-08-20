@@ -16,9 +16,13 @@ public static class OfficialRankAttachment
     // reason -- ten near-identical rows of an obscure single character (one per player, since
     // these failures are almost always roster-wide: no key, offline, quota gone) reads as the
     // app being broken, not as information. So the CELL collapses to just three visual states
-    // -- a resolved rank code, "未" for unranked, or a neutral "nothing to show" marker for
-    // every failure -- while every state keeps its own distinct, friend-facing sentence in
-    // OfficialRankDisplay.StatusText for issue #9's tooltip to read.
+    // -- a resolved rank code, "未" for a player with no rank in the current queue, Solo, or
+    // Flex, or a neutral "nothing to show" marker for every failure -- while every state keeps
+    // its own distinct, friend-facing sentence in OfficialRankDisplay.StatusText for issue #9's
+    // tooltip to read. A resolved rank code can carry a fourth, orthogonal signal on top of
+    // these three -- OfficialRankDisplay.IsFromDifferentQueue, rendered as a dotted underline
+    // -- when it is a Solo/Flex fallback shown in the *other* ranked queue's game; see
+    // FormatRank below.
     private const string StaleSuffix = "*";
     private const string FailureMarker = "—";
 
@@ -38,10 +42,10 @@ public static class OfficialRankAttachment
     /// set from <paramref name="profiles"/> where a match exists, joined by
     /// <see cref="OverlayPlayer.StableKey"/> against <see cref="RevealedPlayerIdentity.StableKey"/> --
     /// never by display name or Riot ID text. Every matched entry now produces a display, not
-    /// just the ones with a resolved rank: unranked, no-ladder-queue, and every lookup failure
-    /// each get a display (see <see cref="Describe"/>), so a row is never blank once a lookup
-    /// result exists for it. When nothing would change, the exact same <paramref name="snapshot"/>
-    /// instance is returned so callers never manufacture a false diff.
+    /// just the ones with a resolved rank: unranked and every lookup failure each get a display
+    /// (see <see cref="Describe"/>), so a row is never blank once a lookup result exists for it.
+    /// When nothing would change, the exact same <paramref name="snapshot"/> instance is
+    /// returned so callers never manufacture a false diff.
     /// </summary>
     public static OverlaySnapshot Attach(OverlaySnapshot snapshot, HistoricalProfilesResult? profiles)
     {
@@ -114,16 +118,20 @@ public static class OfficialRankAttachment
 
     /// <summary>
     /// Every <see cref="HistoricalProfileEntry"/> becomes a display, never a skip: a resolved
-    /// rank, an honest "no rank to show, and here is why" for unranked/no-ladder/failure, or a
-    /// stale marker layered on top of either of those. The split below mirrors the entry's own
+    /// rank, an honest "no rank to show, and here is why" for unranked/failure, or a stale
+    /// marker layered on top of either of those. The split below mirrors the entry's own
     /// invariants -- <see cref="HistoricalProfileEntry.WithProfile"/> only allows
     /// Available/Partial/Stale, <see cref="HistoricalProfileEntry.Failure"/> only allows the
     /// other eight -- so whether Profile is null is itself the reliable signal, not Availability
-    /// read on its own. "No ladder" can arrive either way: the synthetic/replay fixture reaches
-    /// it with a Profile present and OfficialRank null (see HistoricalTestData.Profile), while
-    /// the live transport reaches it as a failure carrying
-    /// <see cref="HistoricalFailureReason.NoRankedLadder"/> (see
-    /// RiotHistoricalProfileTransport.FetchAsync) -- both must land on the same wording.
+    /// read on its own.
+    /// A resolved profile with no <see cref="HistoricalProfile.OfficialRank"/> always means the
+    /// same thing now, regardless of which queue is being played:
+    /// RiotHistoricalProfileTransport.FetchAsync searches the queue actually being played (when
+    /// it has a ranked ladder of its own), then Solo, then Flex, before giving up -- so "no
+    /// rank" here means the player genuinely holds no Solo or Flex rank, full stop. A queue
+    /// with no ladder of its own (ARAM and the like) no longer gets a different reading the way
+    /// it used to: there is no ladder-specific rank left to be missing, only the two real ones,
+    /// and this profile already reflects that search having come up empty.
     /// </summary>
     private static OfficialRankDisplay Describe(HistoricalProfileEntry entry)
     {
@@ -135,29 +143,13 @@ public static class OfficialRankAttachment
 
         if (entry.Profile is not null)
         {
-            // A resolved profile with no OfficialRank means one of two very different things,
-            // and only the queue tells them apart: a queue that HAS a ladder (420/440) but this
-            // player has not climbed it yet ("unranked"), versus a queue with no ladder concept
-            // at all (ARAM/450 and anything else), where calling the player "unranked" would
-            // falsely imply a ladder exists for them to be unplaced on.
-            return IsRankedQueue(entry.Profile.Queue.QueueId)
-                ? Unranked(entry.Profile, isStale)
-                : NoLadder(isStale);
+            return Unranked(entry.Profile, isStale);
         }
 
         // Stale never reaches here -- HistoricalProfileEntry.Failure's invariant forbids it --
         // so a failure entry is never marked stale; there is no cached data behind it to be old.
-        // NoRankedLadder is checked ahead of the generic Availability switch below: it is a
-        // failure by shape (Profile is null, no HTTP call was ever made) but not a failure by
-        // meaning, and it must land on exactly the same wording as the profile-present branch
-        // above, not on the generic "something is wrong" marker every other failure gets.
-        return entry.FailureReason == HistoricalFailureReason.NoRankedLadder
-            ? NoLadder(isStale: false)
-            : Failure(entry.Availability);
+        return Failure(entry.Availability);
     }
-
-    private static bool IsRankedQueue(int queueId) =>
-        queueId == HistoricalQueue.RankedSolo.QueueId || queueId == HistoricalQueue.RankedFlex.QueueId;
 
     // "D4", "E2", "G1" -- tier initial plus division digit, the shorthand players already
     // use for themselves. The three apex tiers have no division the way I-IV mean it for
@@ -166,13 +158,43 @@ public static class OfficialRankAttachment
     {
         var tierCode = TierCode(rank.Tier);
         var shortCode = IsApexTier(rank.Tier) ? tierCode : WithDivision(tierCode, rank.Division);
-        // A fresh rank needs no further explanation -- the code already says everything. A
-        // stale one gets the marker below plus a sentence, so a three-hour-old cache is never
-        // mistaken for this instant's rank.
-        var statusText = isStale ? "顯示的是較舊的快取牌位，不是最新資料" : string.Empty;
-        var tooltipText = BuildTooltipText($"官方牌位：{FullRankText(rank)}", profile, isStale);
-        return new OfficialRankDisplay(WithStaleSuffix(shortCode, isStale), statusText, isStale, tooltipText);
+        // The rank's own queue (rank.Queue) can now legitimately differ from the queue actually
+        // being played (profile.Queue) -- RiotHistoricalProfileTransport falls back to Solo or
+        // Flex when the player has no rank in the current queue. queueMismatch drives the
+        // tooltip's explicit note unconditionally (a player must always be able to see which
+        // queue a rank came from); isFromDifferentQueue additionally gates the row cell's mark
+        // and StatusText sentence to only the case that could actually be mistaken for a
+        // same-queue rank -- a ranked current queue (Solo or Flex) showing the other one's
+        // rank. A no-ladder current queue (ARAM) never sets it: every rank shown there is a
+        // fallback by construction, so a mark on every row would be pure clutter, not
+        // information -- the tooltip still names the true queue either way.
+        var queueMismatch = rank.Queue.QueueId != profile.Queue.QueueId;
+        var isFromDifferentQueue = queueMismatch && profile.Queue.IsRankedLadder;
+        var crossQueueNote = queueMismatch ? CrossQueueNote(rank.Queue, profile.Queue) : null;
+        // A fresh, same-queue rank needs no further explanation -- the code already says
+        // everything. Staleness and a cross-queue fallback each add their own plain-language
+        // sentence (and combine when both are true), so neither fact is ever left implicit in
+        // a marker alone.
+        var statusText = isStale
+            ? (isFromDifferentQueue
+                ? $"顯示的是較舊的快取牌位，不是最新資料；{crossQueueNote}"
+                : "顯示的是較舊的快取牌位，不是最新資料")
+            : (isFromDifferentQueue ? crossQueueNote! : string.Empty);
+        var tooltipText = BuildTooltipText($"官方牌位：{FullRankText(rank)}", profile, isStale, crossQueueNote);
+        return new OfficialRankDisplay(
+            WithStaleSuffix(shortCode, isStale),
+            statusText,
+            isStale,
+            tooltipText,
+            isFromDifferentQueue);
     }
+
+    // "這是彈性積分的牌位，不是單雙排的牌位" -- names the queue the rank actually belongs to and
+    // says plainly that it is not the queue currently being played, so a fallback rank can never
+    // be read as this game's own. Used both for the tooltip (always, on any mismatch) and for
+    // StatusText (only when the row cell also carries the mark -- see FormatRank).
+    private static string CrossQueueNote(HistoricalQueue trueQueue, HistoricalQueue currentQueue) =>
+        $"這是{trueQueue.DisplayName}的牌位，不是{currentQueue.DisplayName}的牌位";
 
     private static string WithDivision(string tierCode, string division)
     {
@@ -217,34 +239,18 @@ public static class OfficialRankAttachment
 
     // 未定位 is standard zh-tw LoL vocabulary and it is real information about the player --
     // distinct from every failure below, which is information about the app, not the player --
-    // so it keeps its own marker rather than folding into FailureMarker.
+    // so it keeps its own marker rather than folding into FailureMarker. The wording is
+    // deliberately queue-agnostic ("this player currently has no Solo or Flex rank") rather
+    // than naming the queue being played: RiotHistoricalProfileTransport.FetchAsync already
+    // searched the current queue (when it has a ladder), Solo, and Flex before reaching this
+    // state, so it is the same fact about the player -- no rank in either real ladder --
+    // whether they are mid-ARAM or mid-Solo when it is shown; see
+    // UnrankedIsTheSameFactWhetherTheCurrentQueueHasALadderOrNot.
     private static OfficialRankDisplay Unranked(HistoricalProfile profile, bool isStale)
     {
-        const string statusText = "這個模式目前還沒有牌位，這位玩家尚未定位";
+        const string statusText = "這位玩家目前沒有單雙排或彈性積分的官方牌位，尚未定位";
         var tooltipText = BuildTooltipText($"官方牌位：{statusText}", profile, isStale);
         return new OfficialRankDisplay(WithStaleSuffix("未", isStale), statusText, isStale, tooltipText);
-    }
-
-    // ShortCode is empty on purpose, not a marker: in a queue with no ranked ladder (ARAM and
-    // the like) the concept can never have a value, on any player, in any game played in that
-    // queue. A glyph here would be clutter repeated on every row of every ARAM game, not
-    // information -- see OverlayWindow.UpdatePlayerRank, which already collapses the cell
-    // whenever the text is empty. IsStale is still recorded honestly (for #9's tooltip) even
-    // though the cell stays empty either way -- there is no base marker for a "*" to attach to.
-    //
-    // The tooltip deliberately never reads queue/source/fetch time off a profile here, even
-    // though the profile-present call site below has one to read: this state is also reachable
-    // through a Profile-absent failure entry carrying NoRankedLadder (see the other call site
-    // in Describe and RiotHistoricalProfileTransport.FetchAsync), and
-    // NoRankedLadderFailureReasonMatchesTheProfilePresentNoLadderDisplayExactly pins that both
-    // paths must produce byte-identical output. The failure path never has a profile to read
-    // those fields from, so the profile-present path cannot show them either without the two
-    // silently drifting apart.
-    private static OfficialRankDisplay NoLadder(bool isStale)
-    {
-        const string statusText = "這個模式沒有排位天梯，查不到官方牌位";
-        var tooltipText = BuildTooltipText($"官方牌位：{statusText}", profile: null, isStale);
-        return new OfficialRankDisplay(string.Empty, statusText, isStale, tooltipText);
     }
 
     private static string WithStaleSuffix(string code, bool isStale) => isStale ? code + StaleSuffix : code;
@@ -254,13 +260,20 @@ public static class OfficialRankAttachment
     /// already carries its own "官方牌位：" label; below it, when <paramref name="profile"/> is
     /// available, the queue this reading is for, who supplied it, and when -- straight off
     /// <see cref="HistoricalProfile.Queue"/>/<see cref="HistoricalProfile.Source"/>/
-    /// <see cref="HistoricalProfile.FetchedAt"/>, no re-derivation. <paramref name="isStale"/>
+    /// <see cref="HistoricalProfile.FetchedAt"/>, no re-derivation. <paramref name="crossQueueNote"/>
+    /// (see <see cref="CrossQueueNote"/>) adds an explicit sentence naming the rank's true
+    /// queue whenever it differs from the one being played -- including in a no-ladder queue
+    /// like ARAM, where every rank shown is a fallback, even though the row cell itself never
+    /// carries a mark for that case (see <see cref="FormatRank"/>). <paramref name="isStale"/>
     /// adds a plain-language line of its own -- staleness must be stated in words, not implied
-    /// by <see cref="StaleSuffix"/> alone, since the row cell can be too terse (or, for
-    /// <see cref="NoLadder"/>, entirely empty) to carry it. <see cref="HonestyNote"/> closes
-    /// every path without exception.
+    /// by <see cref="StaleSuffix"/> alone, since the row cell can be too terse to carry it.
+    /// <see cref="HonestyNote"/> closes every path without exception.
     /// </summary>
-    private static string BuildTooltipText(string rankLine, HistoricalProfile? profile, bool isStale)
+    private static string BuildTooltipText(
+        string rankLine,
+        HistoricalProfile? profile,
+        bool isStale,
+        string? crossQueueNote = null)
     {
         var lines = new List<string> { rankLine };
         if (profile is not null)
@@ -268,6 +281,11 @@ public static class OfficialRankAttachment
             lines.Add(
                 $"{profile.Queue.DisplayName} · 來源：{profile.Source.DisplayName} · " +
                 $"查詢時間 {profile.FetchedAt.ToLocalTime():MM/dd HH:mm}");
+        }
+
+        if (crossQueueNote is not null)
+        {
+            lines.Add(crossQueueNote);
         }
 
         if (isStale)

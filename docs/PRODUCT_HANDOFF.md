@@ -475,8 +475,8 @@ P0 的架構性問題（長生命週期 UI、pointer state machine、snapshot �
 ### 決策與捨棄的方案
 
 - **失敗狀態共用一個中性符號（`—`），不是一個原因一個符號。** 這些失敗幾乎都是全隊性的（沒設 key、離線、額度用完），十列一個生僻符號讀起來像程式壞了，不是資訊；真正的原因留在 tooltip 的完整句子裡（`OfficialRankDisplay.StatusText`／`TooltipText`）。
-- **沒有排位天梯的 queue（ARAM）整格收起，不是打符號。** 這個概念在 ARAM 對任何人、任何一局都不可能有值，符號只是每一列都重複的雜訊，`ShortCode` 直接留空字串，`OverlayWindow.UpdatePlayerRank` 已有的「文字為空就收起 cell」邏輯自然適用，不需要新的顯示分支。
-- **順手抓到一個真的 bug：`RiotHistoricalProfileTransport` 把「沒有排位天梯」回報成 `ProviderUnavailable`**——和「來源真的壞掉」共用同一個信號。每一場 ARAM 都會告訴玩家「資料來源故障」，但其實什麼都沒壞。新增 `HistoricalFailureReason.NoRankedLadder`，讓這個語意從 transport 一路帶到 coordinator 再到 presentation，`Describe()` 特別在通用 `Availability` switch 之前先攔截這個 reason，而且刻意讓它和「profile 存在但 `OfficialRank` 為 null 且 queue 沒有天梯」那條路徑輸出逐字相同（`NoRankedLadderFailureReasonMatchesTheProfilePresentNoLadderDisplayExactly` 測試釘住這件事，因為兩條路徑今後很容易在不知不覺中分岔）。
+- **沒有排位天梯的 queue（ARAM）整格收起，不是打符號。** 這個概念在 ARAM 對任何人、任何一局都不可能有值，符號只是每一列都重複的雜訊，`ShortCode` 直接留空字串，`OverlayWindow.UpdatePlayerRank` 已有的「文字為空就收起 cell」邏輯自然適用，不需要新的顯示分支。[狀態：第 18 節加入 Solo／Flex 牌位 fallback 後，ARAM 現在會顯示玩家的 Solo 或 Flex 牌位（找不到時才是「未」），不再整格收起；這裡描述的是 fallback 之前、ARAM 完全查不到任何牌位時的舊行為。]
+- **順手抓到一個真的 bug：`RiotHistoricalProfileTransport` 把「沒有排位天梯」回報成 `ProviderUnavailable`**——和「來源真的壞掉」共用同一個信號。每一場 ARAM 都會告訴玩家「資料來源故障」，但其實什麼都沒壞。新增 `HistoricalFailureReason.NoRankedLadder`，讓這個語意從 transport 一路帶到 coordinator 再到 presentation，`Describe()` 特別在通用 `Availability` switch 之前先攔截這個 reason，而且刻意讓它和「profile 存在但 `OfficialRank` 為 null 且 queue 沒有天梯」那條路徑輸出逐字相同（`NoRankedLadderFailureReasonMatchesTheProfilePresentNoLadderDisplayExactly` 測試釘住這件事，因為兩條路徑今後很容易在不知不覺中分岔）。[狀態：第 18 節的單／彈牌位 fallback 工作把 ARAM 短路徑本身拿掉了——沒有天梯的 queue 現在會實際查 Solo／Flex 牌位，不再短路——`NoRankedLadder` 因此不再有任何路徑能產生它，已經整個從 enum 移除；上面提到的兩條路徑與那個測試都不存在了，`Describe()` 的「沒有天梯」分支也併回「未定位」。]
 - **牌位段位名稱改用台灣服用語（鐵／銅／銀／金），不是黑鐵／青銅／白銀／黃金。** 第一版把中國服的低段位詞和宗師／菁英（台灣專用詞）混在同一句 tooltip 裡，等於兩個伺服器的用語同時出現；`edcb59b` 修正為統一使用台灣服全套詞彙。
 - **底部單人歷史面板保留，但職責縮小到牌位無法覆蓋的部分。** 每一列都有牌位之後，底部原本的牌位那半段變成純重複；移除後只留來源、queue、樣本數、取得時間、信心和近期風格（最常用英雄、五維風格），這些是逐列的 25px 欄位無論如何都放不下、只有整段落文字才能講清楚的資訊。曾經考慮整塊移除，但那會連帶砍掉風格呈現，屬於另一個工作項目，因此沒有採用。`HistoricalPanelPresenter.Describe` 在沒有 profile（未查到或查詢失敗）時回傳 `HistoricalPanelDisplay.Empty`，`OverlayWindow` 用 `Visibility.Collapsed`（不是 `Hidden`）整塊收起，理由和第 16 節 `SizeToContent.Height` 的既有規則一致：`Hidden` 仍占版面，會讓視窗卡在最高狀態，尤其在對局結束、名單清空、最該收起空間的時刻最明顯。
 
@@ -547,3 +547,68 @@ CI 狀態必須誠實記錄：這四個實作 commit（`96a3dc7`～`8884b60`）�
 - 工作目錄裡未追蹤的 `Screen15.png`（見九角度審視第 1 點）建議在 push 前處理掉，避免被任何自動化或手動操作誤加進版本控制。
 - 兩台乾淨 Windows 環境的下載／安裝／完整對局／移除驗收、未參與開發的朋友測試——仍未開始。
 - `outputs/` 目錄若有舊 package，早於本輪所有變動，展示前需重新打包。
+
+## 18. 2026-08-20 後續：沒有天梯的 queue 改用 Solo／Flex 牌位 fallback
+
+第 17 節做完後，使用者指出一個第 17 節本身沒解決的落差：ARAM 這類沒有排位天梯的 queue，牌位欄整格是空的——transport 在送出任何 HTTP 請求前就直接回報 `NoRankedLadder` 短路徑（見第 17 節「決策與捨棄的方案」）。玩家在 ARAM 時通常還是想知道隊友的 Solo／Flex 牌位，而 LEAGUE-V4 的 `entries/by-puuid` 本來就會回傳這位玩家「每一個」queue 的 entry，不是只有查詢的那一個——單一回應裡已經有 fallback 需要的所有資料，缺的只是「挑哪一個 entry」的邏輯。這節記錄這次補做的決策；本節之前的內容維持不動，落差處已用「[狀態：...]」標記回指到這裡。
+
+### 改動範圍
+
+- `src/LolPerformanceOverlay.Core/Historical/RiotHistoricalProfileTransport.cs`：移除 ARAM 短路徑，改成 `FindPreferredEntry`／`PreferenceOrder`——同一次 `entries/by-puuid` 回應裡，依序找「目前 queue 自己的天梯（如果有）→ Solo → Flex」的第一筆 entry，找到誰就把 `OfficialRank` 標成誰的 queue，不是查詢時的 queue。仍然只有兩次 HTTP 呼叫（account-v1 + league-v4），fallback 純粹是同一份回應裡挑資料的邏輯，不會多打第三次請求。
+- `src/LolPerformanceOverlay.Core/Historical/HistoricalProfileCoordinator.cs`：`IsValid` 原本要求 `OfficialRank.Queue` 必須和 `profile.Queue`（查詢的 queue）完全一致，這條規則在 fallback 之後會誤殺所有合法的跨 queue 牌位；改成只要求 `OfficialRank.Queue` 必須是一個真的排位天梯（`HistoricalQueue.IsRankedLadder`，即 Solo 或 Flex），不再要求和 `profile.Queue` 相同。
+- `src/LolPerformanceOverlay.Core/Historical/HistoricalModels.cs`：新增 `HistoricalQueue.IsRankedLadder`（`QueueId` 是 420 或 440）給 coordinator 和 presentation 共用；移除 `HistoricalFailureReason.NoRankedLadder`（理由見下）。
+- `src/LolPerformanceOverlay.Core/Presentation/OfficialRankAttachment.cs`：`Describe()` 的「沒有天梯」分支整個併回「未定位」；`FormatRank` 新增 `IsFromDifferentQueue` 判斷與 `CrossQueueNote` 措辭；`Unranked()` 的句子改成不提「這個模式」，因為現在「未定位」對任何 queue 都是同一件事實。
+- `src/LolPerformanceOverlay.Core/Models.cs`：`OfficialRankDisplay` 新增 `IsFromDifferentQueue` 欄位（trailing optional，維持既有的可成長 positional record 慣例）。
+- `src/LolPerformanceOverlay/UI/OverlayWindow.cs`：`UpdatePlayerRank` 依 `IsFromDifferentQueue` 加上點狀底線（`CrossQueueRankDecorations`），欄寬與 padding 完全不變。
+- 測試：`RiotHistoricalProfileTransportTests.cs`、`HistoricalCoordinatorTests.cs`、`OfficialRankAttachmentTests.cs` 三個檔案都有大幅調整，明細見下方「測試」小節。
+
+### 選擇的優先順序
+
+`目前 queue 自己的天梯（如果有）→ Solo(420) → Flex(440)`，去重後實作。Solo 場找不到 Solo entry 就退到 Flex；Flex 場找不到 Flex entry 就退到 Solo；ARAM（或任何沒有天梯的 queue）沒有「自己的」entry 可以優先，順序直接從 Solo 開始。三者都找不到才是「未定位」。這個順序完全在同一次 LEAGUE-V4 回應裡挑選，不多打一次請求——`RiotHistoricalProfileTransportTests` 裡好幾個案例都直接斷言 `handler.CallCount == 2`，包含 ARAM 最壞情況（自己的天梯不存在、Solo 也沒有，第三順位 Flex 才命中）。
+
+### `HistoricalFailureReason.NoRankedLadder` 的決定：整個移除
+
+第 17 節新增這個 reason，是為了把「這個 queue 沒有天梯」和「來源真的壞掉」（`ProviderUnavailable`）分開講清楚——這在當時是對的，因為 transport 那時候看到沒有天梯的 queue 就直接放棄，回報一個失敗原因。
+
+fallback 做完之後，這整條路徑消失了：transport 不再因為「queue 沒有天梯」而放棄查詢，它一律嘗試 Solo／Flex fallback，三者都查不到時是 `Available` 且 `OfficialRank` 為 `null` 的「未定位」（不是 `NoRankedLadder`，也不是 `RecordNotFound`——後者的修正見下方「account 解析成功但沒有任何排位」小節）。檢查過整個 repository 後，沒有任何地方——transport、coordinator、synthetic provider——還會產生 `NoRankedLadder`。與其把一個沒有人能再產生的 reason 留在 enum 裡（下一個維護者看到它會合理地以為某條路徑還在用它），這次直接把它從 `HistoricalFailureReason` 移除，`OfficialRankAttachment.Describe()` 對應的「沒有天梯」分支也整個併回 `Unranked`——現在「這個 queue 沒有天梯」和「這個 queue 有天梯但這位玩家還沒爬」在查完 Solo／Flex 之後是同一個事實（玩家沒有任何一邊的牌位），沒有理由再分成兩種呈現。`Unranked()` 的句子因此也從「這個模式目前還沒有牌位」改成「這位玩家目前沒有單雙排或彈性積分的官方牌位」，不再暗示「這個 queue」本身有天梯概念。
+
+### Cell 標記：點狀底線，寬度不變
+
+`OfficialRankDisplay` 新增 `IsFromDifferentQueue`：只有在「目前 queue 自己就是一個排位天梯（Solo 或 Flex）」且「顯示的牌位來自另一個天梯」時才是 `true`——例如 Solo 場沒有 Solo 牌位、改顯示 Flex 牌位。ARAM 這類沒有天梯的 queue 永遠是 `false`：那裡每一列本來就是 fallback，標記等於每局都出現在十列上，是第 8 節已經處理掉的「一種失敗一個符號」同一種雜訊問題；tooltip 仍然照實講出牌位真正屬於哪個 queue，只是 cell 本身不加標記。
+
+選的標記是「點狀底線」（`OverlayWindow.CrossQueueRankDecorations`），不是新字元、不是新顏色：
+
+- **不佔寬度**：底線是 `TextBlock.TextDecorations`，畫在既有文字下方，不是額外字元，rank 欄原本的 25px（已經放得下最長的真實內容 `"GM*"`）完全不用變，champion 欄的算法也不用重算。往回推算給後人核對：Expanded 視窗 520px，`teamsGrid` 的 `Margin(10,0,10,8)` 留下 500px 給兩個隊伍欄加一個 12px 間距，每個隊伍欄 `(500-12)/2 = 244px`；隊伍卡片 `Padding(7)` 留下 `244-14 = 230px`；單行 row 自己的 `Padding(4,0,5,0)` 留下 `230-9 = 221px`；扣掉其餘四個固定欄（`28+38+25+34 = 125px`），champion 欄剩下 `221-125 = 96px`，和加牌位欄那次的算法完全一樣，因為 rank 欄本身沒有變寬。
+- **不靠顏色**：底線用和文字相同的金色（`#D9B36C`），不是另一種顏色；區分靠的是「有沒有底線、底線是點狀還是實線」這種形狀差異，符合 AGENTS.md 第 6 點色覺不能是唯一依據的要求。
+- **不是抽象符號**：點狀底線是瀏覽器、Wiki 常見的「這裡還有更多資訊，滑鼠移過去看」慣例（`<abbr title="">` 用的就是這個），不需要另外的圖例——滑鼠移過去，tooltip 就會照實講出牌位真正的來源 queue。
+
+### 誠實性：tooltip 一律照實講
+
+不管 cell 有沒有標記，`FormatRank` 只要偵測到 `rank.Queue` 和 `profile.Queue`（目前這場的 queue）不同，就會在 tooltip 加一句「這是＿的牌位，不是＿的牌位」（`CrossQueueNote`），點名牌位真正屬於哪個 queue、以及它不是目前這場的牌位。這句話不看 cell 有沒有標記就一定會加——ARAM 場的牌位一定會觸發它，因為 ARAM 永遠不是 Solo 或 Flex；只有 `StatusText`（cell 旁的白話句子）和 cell 的點狀底線才依「目前 queue 是不是排位天梯」決定要不要顯示，理由和上面 cell 標記的理由相同：ARAM 每列都是 fallback，重複標記是雜訊，但 tooltip 仍然是一對一、每次都誠實的。
+
+### API 用量：驗證而非假設
+
+ARAM 以前完全不打 Riot API；現在每一場 ARAM 都會對每位有 Riot ID 的玩家跑一次和排位場完全一樣的兩次呼叫（account-v1 + league-v4）。實際讀過 `HistoricalProfileCoordinator` 的程式碼確認：
+
+- **並發上限**：`HistoricalProfileCoordinatorOptions.Default.MaximumConcurrency = 3`——`_concurrency`（`SemaphoreSlim`）限制同時間最多 3 位玩家的查詢在跑，不管 queue 是不是 ARAM，這條限制對 fallback 之前之後完全一樣。
+- **單次請求人數上限**：`MaximumPlayersPerRequest = 10`——`GetProfilesAsync` 一開始就對超過 10 人的請求丟例外，剛好等於一場 10 人對局的人數上限，不會無限增長。
+- **每位玩家的呼叫數不變**：fallback 完全發生在「挑同一份 LEAGUE-V4 回應裡的哪個 entry」，不是多打一次請求——`RiotHistoricalProfileTransportTests` 的多個新案例（包含 ARAM 最壞情況：自己的天梯沒有、Solo 也沒有，第三順位 Flex 才命中）都直接斷言 `handler.CallCount == 2`，證明 fallback 不會把 2 次呼叫變成 3 次或更多。
+- **快取邊界呼叫觸發時機**：`App.xaml.cs` 的 `BeginHistoricalLookup` 只在名單（`HistoryRosterMatches`）真正變動時才觸發一次查詢，不是每個 frame 都查；`HistoricalProfileCoordinatorOptions.Default` 的 `FreshLifetime = 15 分鐘`、`StaleLifetime = 2 小時`，同一位玩家在 15 分鐘內出現在下一場（不論排位或 ARAM）會直接吃快取，不會重新打。
+
+結論：fallback 沒有讓「每次查詢」變貴，變的是「以前完全不查的 ARAM，現在和排位場一樣查」——對一個 Personal key（20 requests/1s、100 requests/2min）而言，等於把原本只有排位場才有的用量，擴大到玩家花在 ARAM 上的時間比例。上面列的三層邊界（並發、單次人數、快取）在 fallback 之前就已經存在，fallback 沒有新增或移除任何一層，只是讓 ARAM 開始受它們保護，而不是完全繞過查詢。
+
+### Review 補漏：account 解析成功但沒有任何排位，不該回報「查無資料」
+
+上面的 fallback 做完後，coordinator 端 review 時抓到一個 pre-existing、不是這次改動造成、但正好在同一個地方的缺陷：`FindPreferredEntry` 找不到任何 entry 時，原本的程式碼直接回報 `HistoricalProfileAvailability.NotFound` / `HistoricalFailureReason.RecordNotFound`——但走到這一步，ACCOUNT-V1 早就已經成功解析出這個玩家的帳號，LEAGUE-V4 也確實回應了（只是回應裡沒有 Solo 或 Flex 的 entry）。「這位玩家存在，但沒有排位牌位」和「查無這個帳號」是兩件不同的事實，前者用「查無資料」的措辭形容，等於暗示查詢本身失敗，實際上什麼都沒壞——這和第 8 節「沒有排位天梯」誤用 `ProviderUnavailable` 是同一種缺陷形狀：presentation 層本來就有誠實的「未定位」狀態可以呈現，只是 shipping 的 live transport 走不到那條路徑。fallback 讓「沒有 Solo 也沒有 Flex 排位」變成一個常見結果（尤其是還沒打過幾場排位的新帳號），這個缺陷因此變得更容易被玩家看到。
+
+修法：`RiotHistoricalProfileTransport.FetchAsync` 在 `FindPreferredEntry` 回傳 `null` 時，現在建立一個 `Availability = Available`、`OfficialRank = null` 的 `HistoricalProfile`（`SampleCount = 0`、`Confidence = InsufficientSample`、`CommonChampions`／`CommonRoles` 空陣列、`PlayStyle = null`——誠實地表示「這是一次只查得到帳號、查不到排位樣本的查詢」，不是編造數字）。`HistoricalProfileAvailability.NotFound` / `HistoricalFailureReason.RecordNotFound` 現在只保留給 ACCOUNT-V1 本身解析失敗（404）那一條路徑——`RiotIdNotFoundStopsBeforeAnyLeagueLookup` 測試釘住這是唯一還會製造 `RecordNotFound` 的地方。`HistoricalProfileCoordinator.IsValid` 不用改：這次 fallback 修正的 `profile.OfficialRank is not null && !profile.OfficialRank.Queue.IsRankedLadder` 檢查本來就會在 `OfficialRank` 為 `null` 時直接短路過去；另外重新逐條核對了 `SampleCount < 5` 必須搭配 `InsufficientSample` 那條規則，也確認新的零樣本 profile 符合，沒有假設——新增 `AnAvailableProfileWithNoOfficialRankPassesValidationAndCaches` 測試直接用這個確切形狀跑過完整的 coordinator 驗證與快取路徑。`Unranked()` 的措辭（「這位玩家目前沒有單雙排或彈性積分的官方牌位，尚未定位」）在上面加入跨 queue 措辭時已經改成不提「這個模式」，重新核對後確認同一句話原封不動適用於這個新路徑，不需要再改。
+
+### 測試
+
+- `RiotHistoricalProfileTransportTests.cs`：新增／改寫涵蓋——目前 queue 優先於 Solo／Flex（含「目前 queue 是 Flex 時不會被 Solo-first 的通用順序騙走」這個反例）、Solo 在目前 queue 沒有 entry 時當 fallback、Flex 在目前與 Solo 都沒有 entry 時當 fallback、沒有天梯的 queue（ARAM）分別 fallback 到 Solo／Flex、account 解析成功但三個 queue 都沒有 entry（含全空陣列與「只有不相干 queueType」兩種情境）時回傳 `Available`＋`OfficialRank` 為 `null` 的未定位 profile 而不是 `RecordNotFound`、`RecordNotFound` 現在只保留給 ACCOUNT-V1 本身解析失敗、牌位標的是真正來源的 queue 而不是查詢的 queue；每個案例都斷言 `handler.CallCount == 2`，釘住「fallback 不多打請求」。
+- `HistoricalCoordinatorTests.cs`：`IsValid` 現在接受「跨天梯」的合法 fallback（Solo 查詢、Flex 牌位）、仍然拒絕「牌位指向根本不是天梯的 queue」（例如 ARAM）、也接受 `OfficialRank` 為 `null` 的零樣本未定位 profile；新增 ARAM 查詢走完整快取／去重路徑的案例，取代原本釘住 `NoRankedLadder` 的測試。
+- `OfficialRankAttachmentTests.cs`：新增涵蓋——目前 queue 自己的牌位沒有跨 queue 標記、跨 queue fallback 牌位在排位 queue 裡有標記與 `StatusText`、同一份 fallback 在沒有天梯的 queue 裡沒有 cell 標記但 tooltip 仍照實講、「未定位」在有天梯與沒有天梯的 queue 下輸出完全相同（`ShortCode`／`StatusText`／`IsStale` 一致，只有 tooltip 裡的 queue 名稱不同）；移除／改寫所有原本釘住 `NoRankedLadder` 的測試；原本「同一組輸入貼兩次不產生 diff／不觸發 reducer」的回歸測試（`AttachingTheSameMixOfRankedUnrankedCrossQueueAndFailedProfilesTwiceProducesNoDiffOrReducerUpdate`）保留並加入跨 queue 案例，確認新欄位一樣遵守既有的無變化不重繪規則。這個 review 補漏沒有改動 `OfficialRankAttachment` 本身（`Describe()` 原本就會把「Profile 存在、`OfficialRank` 為 `null`」正確畫成「未定位」），缺陷完全在 transport 端，所以這個檔案不需要新增案例。
+
+現況（獨立重跑確認）：核心測試 263／263（第 17 節基準 254，第 18 節 fallback 本身淨增 7，這次 review 補漏再淨增 2）、Windows-adapter 測試 11／11、PackageBuilder 政策測試 29／29 全數通過；`LolPerformanceOverlay.Core`、`LolPerformanceOverlay`（WPF）兩個專案 `--no-incremental` 全新建置都是 0 警告／0 錯誤。`IsFromDifferentQueue`、`IsRankedLadder` 等新名稱同樣不在 `eng/package-config.json` 的 `rawOverlayFieldNames` 阻擋清單內，本輪不需要放寬 gate。`OfficialRankAttachment.Attach` 無變化回傳同一個 snapshot instance 的規則沒有被這次任何一項修改觸碰。
+
+尚未做、延續第 17 節既有清單的部分：這幾個 commit 尚未建立、尚未 push，CI 完全沒有在它們身上跑過；真機滑鼠 hover 是否能清楚看到點狀底線、tooltip 觸發是否順手——screen lock 環境下同樣未驗證，仍然是「未驗證」而不是「已通過」。
