@@ -3,6 +3,7 @@ using System.IO;
 using System.Windows.Controls;
 using System.Windows.Documents;
 using LolPerformanceOverlay.Core;
+using LolPerformanceOverlay.Core.Presentation;
 using LolPerformanceOverlay.Services;
 using LolPerformanceOverlay.UI;
 using LolPerformanceOverlay.Infrastructure;
@@ -38,7 +39,8 @@ public sealed class WindowsAdapterTests
             {
                 Opacity = 0.71,
                 PositionLocked = true,
-                Hotkey = "Alt+Shift+L"
+                Hotkey = "Alt+Shift+L",
+                NameDisplayMode = PlayerNameDisplayMode.RiotId
             };
 
             await store.SaveAsync(AppSettingsSnapshot.Capture(original));
@@ -49,6 +51,7 @@ public sealed class WindowsAdapterTests
             Assert.Equal(0.71, restored.Opacity);
             Assert.True(restored.PositionLocked);
             Assert.Equal("Alt+Shift+L", restored.Hotkey);
+            Assert.Equal(PlayerNameDisplayMode.RiotId, restored.NameDisplayMode);
         }
         finally
         {
@@ -165,6 +168,33 @@ public sealed class WindowsAdapterTests
 
             Assert.True(double.IsNaN(settings.Left));
             Assert.Null(LeagueClientDiscovery.ParseLockfile(lockfilePath));
+        }
+        finally
+        {
+            if (Directory.Exists(directory))
+            {
+                Directory.Delete(directory, recursive: true);
+            }
+        }
+    }
+
+    [Fact]
+    public void ACorruptedNameDisplayModeRecoversToTheChampionNameDefault()
+    {
+        var directory = Path.Combine(Path.GetTempPath(), $"lol-overlay-namemode-{Guid.NewGuid():N}");
+        var settingsPath = Path.Combine(directory, "settings.json");
+        try
+        {
+            Directory.CreateDirectory(directory);
+            // A hand-edited or half-written settings.json could carry a NameDisplayMode value
+            // outside the enum's two real members (0/1); Load() must recover to the safe
+            // default rather than an OverlayPlayer.DisplayName-revealing branch of code seeing
+            // an undefined enum value in some indeterminate way.
+            File.WriteAllText(settingsPath, "{\"NameDisplayMode\": 99}");
+
+            var settings = new SettingsStore(settingsPath).Load();
+
+            Assert.Equal(PlayerNameDisplayMode.ChampionName, settings.NameDisplayMode);
         }
         finally
         {

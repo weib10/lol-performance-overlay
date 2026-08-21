@@ -2,6 +2,8 @@ using System.Text.Json;
 using System.Text.Json.Serialization;
 using Microsoft.Win32;
 using LolPerformanceOverlay.Core;
+using LolPerformanceOverlay.Core.Interaction;
+using LolPerformanceOverlay.Core.Presentation;
 
 namespace LolPerformanceOverlay.Services;
 
@@ -9,10 +11,16 @@ public sealed class AppSettings
 {
     public double Left { get; set; } = double.NaN;
     public double Top { get; set; } = double.NaN;
-    public double Opacity { get; set; } = 0.92;
+    public double Opacity { get; set; } = OverlayOpacityPolicy.Default;
     public bool StartWithWindows { get; set; }
     public bool PositionLocked { get; set; }
     public string Hotkey { get; set; } = "Ctrl+Shift+O";
+
+    // What the Expanded panel shows beside each player's avatar. Defaults to today's behaviour
+    // (champion name); PlayerNameDisplay.Resolve is the single place that decides the actual
+    // text per row, including the anonymity guarantee -- this property only carries the user's
+    // preference, never the decision itself.
+    public PlayerNameDisplayMode NameDisplayMode { get; set; } = PlayerNameDisplayMode.ChampionName;
 
     // Held only in this file (%LOCALAPPDATA%\LolPerformanceOverlay\settings.json), which is
     // never committed and never bundled into a published build. A key entered here takes
@@ -29,7 +37,8 @@ public sealed class AppSettings
             StartWithWindows = StartWithWindows,
             PositionLocked = PositionLocked,
             Hotkey = Hotkey,
-            RiotApiKey = RiotApiKey
+            RiotApiKey = RiotApiKey,
+            NameDisplayMode = NameDisplayMode
         };
 }
 
@@ -40,7 +49,8 @@ internal readonly record struct AppSettingsSnapshot(
     bool StartWithWindows,
     bool PositionLocked,
     string Hotkey,
-    string RiotApiKey)
+    string RiotApiKey,
+    PlayerNameDisplayMode NameDisplayMode)
 {
     public static AppSettingsSnapshot Capture(AppSettings settings)
     {
@@ -52,7 +62,8 @@ internal readonly record struct AppSettingsSnapshot(
             settings.StartWithWindows,
             settings.PositionLocked,
             settings.Hotkey,
-            settings.RiotApiKey);
+            settings.RiotApiKey,
+            settings.NameDisplayMode);
     }
 
     public AppSettings ToSettings() => new()
@@ -63,7 +74,8 @@ internal readonly record struct AppSettingsSnapshot(
         StartWithWindows = StartWithWindows,
         PositionLocked = PositionLocked,
         Hotkey = Hotkey,
-        RiotApiKey = RiotApiKey
+        RiotApiKey = RiotApiKey,
+        NameDisplayMode = NameDisplayMode
     };
 }
 
@@ -121,9 +133,10 @@ public sealed class SettingsStore
                            new AppSettings();
             settings.Left = double.IsFinite(settings.Left) ? settings.Left : double.NaN;
             settings.Top = double.IsFinite(settings.Top) ? settings.Top : double.NaN;
-            settings.Opacity = double.IsFinite(settings.Opacity)
-                ? Math.Clamp(settings.Opacity, 0.35, 1)
-                : 0.92;
+            settings.Opacity = OverlayOpacityPolicy.Clamp(settings.Opacity);
+            settings.NameDisplayMode = Enum.IsDefined(settings.NameDisplayMode)
+                ? settings.NameDisplayMode
+                : PlayerNameDisplayMode.ChampionName;
             settings.Hotkey = string.IsNullOrWhiteSpace(settings.Hotkey)
                 ? "Ctrl+Shift+O"
                 : settings.Hotkey.Trim();

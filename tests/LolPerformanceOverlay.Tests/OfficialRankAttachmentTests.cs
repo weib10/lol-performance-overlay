@@ -221,8 +221,10 @@ public sealed class OfficialRankAttachmentTests
         Assert.Contains("未定位", rankedQueue.StatusText);
         // The tooltip still honestly names whichever queue is actually being played, so the two
         // are not required to be byte-identical there.
-        Assert.Contains(HistoricalQueue.Aram.DisplayName, noLadderQueue.TooltipText);
-        Assert.Contains(HistoricalQueue.RankedSolo.DisplayName, rankedQueue.TooltipText);
+        // Same fact, so the same words: an unranked player's line names no queue at all, which
+        // makes the two cases byte-identical rather than merely similar.
+        Assert.Equal(rankedQueue.TooltipText, noLadderQueue.TooltipText);
+        Assert.DoesNotContain(HistoricalQueue.Aram.DisplayName, noLadderQueue.TooltipText);
     }
 
     [Fact]
@@ -275,8 +277,12 @@ public sealed class OfficialRankAttachmentTests
         Assert.NotEqual(string.Empty, display.StatusText);
         Assert.Contains(HistoricalQueue.RankedFlex.DisplayName, display.StatusText);
         Assert.Contains(HistoricalQueue.RankedSolo.DisplayName, display.StatusText);
+        // The tooltip line names the ladder the rank actually belongs to, in parentheses --
+        // "金 II · 15 LP（彈性積分）" on a Solo board. It no longer spells out which queue is
+        // being played: the parenthesised true queue is the whole point, and a reader already
+        // knows what game they are in.
         Assert.Contains(HistoricalQueue.RankedFlex.DisplayName, display.TooltipText);
-        Assert.Contains(HistoricalQueue.RankedSolo.DisplayName, display.TooltipText);
+        Assert.DoesNotContain(HistoricalQueue.RankedSolo.DisplayName, display.TooltipText);
     }
 
     [Fact]
@@ -293,7 +299,7 @@ public sealed class OfficialRankAttachmentTests
         Assert.False(display.IsFromDifferentQueue);
         Assert.Equal(string.Empty, display.StatusText);
         Assert.Contains(HistoricalQueue.RankedSolo.DisplayName, display.TooltipText);
-        Assert.Contains(HistoricalQueue.Aram.DisplayName, display.TooltipText);
+        Assert.DoesNotContain(HistoricalQueue.Aram.DisplayName, display.TooltipText);
     }
 
     [Fact]
@@ -436,13 +442,18 @@ public sealed class OfficialRankAttachmentTests
     }
 
     [Fact]
-    public void TooltipTextIncludesQueueSourceDisplayNameAndFetchTime()
+    public void RankLineNamesItsLadderAndDropsTheSourceAndFetchTimeThatMadeItLong()
     {
         var display = AttachSingle(AvailableEntry(1, "DIAMOND", "IV"));
 
+        // The line is read mid-game, so it carries the rank and the ladder it belongs to and
+        // nothing else. Who supplied it and when used to sit here and pushed the tooltip past
+        // what anyone stops to read during a fight; the source is stated once in the settings
+        // dialog instead.
         Assert.Contains(HistoricalQueue.RankedSolo.DisplayName, display.TooltipText);
-        Assert.Contains("合成測試資料", display.TooltipText);
-        Assert.Contains(Now.ToLocalTime().ToString("MM/dd HH:mm"), display.TooltipText);
+        Assert.DoesNotContain("合成測試資料", display.TooltipText);
+        Assert.DoesNotContain(Now.ToLocalTime().ToString("MM/dd HH:mm"), display.TooltipText);
+        Assert.DoesNotContain("\n", display.TooltipText);
     }
 
     [Fact]
@@ -455,12 +466,17 @@ public sealed class OfficialRankAttachmentTests
     }
 
     [Fact]
-    public void TooltipTextAttributesTheRankToRiotAndTheScoreToThisGame()
+    public void NoRankLineEverBlendsTheRankWithThisGamesScore()
     {
-        var display = AttachSingle(AvailableEntry(1, "DIAMOND", "IV"));
-
-        Assert.Contains("Riot", display.TooltipText);
-        Assert.Contains("本場相對表現", display.TooltipText);
+        // The sentence separating Riot's data from this program's reading moved out of the
+        // per-row tooltip into the settings dialog and the friend-facing HTML -- saying it ten
+        // times over a live game was the thing that made the tooltip unreadable. What must
+        // still hold here is the substance behind that sentence: no line ever mixes the two.
+        foreach (var display in AllReachableDisplays())
+        {
+            Assert.DoesNotContain("分數", display.TooltipText);
+            Assert.DoesNotContain("表現", display.TooltipText);
+        }
     }
 
     [Fact]

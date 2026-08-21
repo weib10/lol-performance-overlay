@@ -95,6 +95,7 @@ public partial class App : System.Windows.Application
         _overlay = new OverlayWindow(windowSettings);
         var handle = new WindowInteropHelper(_overlay).EnsureHandle();
         _overlay.PositionChanged += OnOverlayPositionChanged;
+        _overlay.OpacityChanged += OnOverlayOpacityChanged;
         _overlay.SettingsRequested += OpenSettings;
         _overlay.OpenExternalLinkRequested += OpenExternalLink;
 
@@ -347,7 +348,13 @@ public partial class App : System.Windows.Application
             return;
         }
 
-        var dialog = new SettingsWindow(_settings) { Owner = _overlay };
+        var overlay = _overlay;
+        var dialog = new SettingsWindow(_settings) { Owner = overlay };
+        // Live preview while the slider is dragged: every tick applies straight to the live
+        // overlay. The same event fires once more when the dialog closes without saving,
+        // restoring the opacity that was in effect before it opened -- see
+        // SettingsWindow.OpacityPreviewChanged / Core's OpacityPreviewSession.Cancel.
+        dialog.OpacityPreviewChanged += previewedOpacity => overlay.Opacity = previewedOpacity;
         if (dialog.ShowDialog() != true)
         {
             return;
@@ -359,6 +366,7 @@ public partial class App : System.Windows.Application
         _settings.StartWithWindows = dialog.Result.StartWithWindows;
         _settings.PositionLocked = dialog.Result.PositionLocked;
         _settings.Hotkey = dialog.Result.Hotkey;
+        _settings.NameDisplayMode = dialog.Result.NameDisplayMode;
 
         StartupManager.SetEnabled(_settings.StartWithWindows);
         _tray?.UpdateStartup(_settings.StartWithWindows);
@@ -761,6 +769,22 @@ public partial class App : System.Windows.Application
 
         _settings.Left = left;
         _settings.Top = top;
+        QueueSettingsSave(flushImmediately: false);
+    }
+
+    // Dragging the right-click menu's opacity slider (see OverlayWindow.OpacityChanged) is
+    // persisted the same way dragging the overlay's position already is: the app-owned
+    // AppSettings is the source of truth for what gets saved, and the debounced save path is
+    // the only one -- the Settings dialog flows through this same field and the same
+    // QueueSettingsSave, never a second persistence path.
+    private void OnOverlayOpacityChanged(double opacity)
+    {
+        if (_settings is null || _isDemo)
+        {
+            return;
+        }
+
+        _settings.Opacity = opacity;
         QueueSettingsSave(flushImmediately: false);
     }
 

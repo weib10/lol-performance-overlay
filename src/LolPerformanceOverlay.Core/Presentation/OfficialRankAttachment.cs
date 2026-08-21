@@ -26,16 +26,14 @@ public static class OfficialRankAttachment
     private const string StaleSuffix = "*";
     private const string FailureMarker = "—";
 
-    // The one sentence that makes AGENTS.md rule 9 (產品誠實性) unmistakable in the row
-    // tooltip (see OverlayWindow.UpdateRowTooltip, which appends TooltipText beneath the
-    // existing name/champion/score block): the rank above this line is Riot's own data, the
-    // score elsewhere in the same tooltip is this program's own reading of the current game,
-    // and the two are never combined into one number. Appended to every state's TooltipText --
-    // including every failure -- so a missing or stale rank can never read as "folded into the
-    // score instead". No MMR/ELO/win-rate wording, ever; see
+    // AGENTS.md rule 9 (產品誠實性) requires that Riot's official rank and this program's own
+    // reading are presented separately and never blended. That statement used to be a sentence
+    // appended to every row's tooltip -- ten times over, on a panel the user reads mid-game.
+    // The rule asks for the distinction to be made honestly and clearly, not for one sentence
+    // to be repeated per row, so it now lives once in the settings dialog and once in the
+    // friend-facing 先看這裡.html. Nothing here may ever combine the two into a single value,
+    // and no MMR/ELO/win-rate wording is permitted -- see
     // NoTooltipOrStatusTextEverMentionsMmrEloOrWinRateWording.
-    private const string HonestyNote =
-        "牌位是 Riot 官方資料，分數是本場相對表現，兩者分開呈現，不會合併或換算成單一數值。";
 
     /// <summary>
     /// Returns a snapshot with each visible, non-anonymous player's <see cref="OverlayPlayer.OfficialRank"/>
@@ -180,7 +178,7 @@ public static class OfficialRankAttachment
                 ? $"顯示的是較舊的快取牌位，不是最新資料；{crossQueueNote}"
                 : "顯示的是較舊的快取牌位，不是最新資料")
             : (isFromDifferentQueue ? crossQueueNote! : string.Empty);
-        var tooltipText = BuildTooltipText($"官方牌位：{FullRankText(rank)}", profile, isStale, crossQueueNote);
+        var tooltipText = BuildRankLine(FullRankText(rank), rank.Queue, isStale);
         return new OfficialRankDisplay(
             WithStaleSuffix(shortCode, isStale),
             statusText,
@@ -249,7 +247,7 @@ public static class OfficialRankAttachment
     private static OfficialRankDisplay Unranked(HistoricalProfile profile, bool isStale)
     {
         const string statusText = "這位玩家目前沒有單雙排或彈性積分的官方牌位，尚未定位";
-        var tooltipText = BuildTooltipText($"官方牌位：{statusText}", profile, isStale);
+        var tooltipText = BuildRankLine(statusText, queue: null, isStale);
         return new OfficialRankDisplay(WithStaleSuffix("未", isStale), statusText, isStale, tooltipText);
     }
 
@@ -269,32 +267,17 @@ public static class OfficialRankAttachment
     /// by <see cref="StaleSuffix"/> alone, since the row cell can be too terse to carry it.
     /// <see cref="HonestyNote"/> closes every path without exception.
     /// </summary>
-    private static string BuildTooltipText(
-        string rankLine,
-        HistoricalProfile? profile,
-        bool isStale,
-        string? crossQueueNote = null)
+    private static string BuildRankLine(string body, HistoricalQueue? queue, bool isStale)
     {
-        var lines = new List<string> { rankLine };
-        if (profile is not null)
-        {
-            lines.Add(
-                $"{profile.Queue.DisplayName} · 來源：{profile.Source.DisplayName} · " +
-                $"查詢時間 {profile.FetchedAt.ToLocalTime():MM/dd HH:mm}");
-        }
-
-        if (crossQueueNote is not null)
-        {
-            lines.Add(crossQueueNote);
-        }
-
-        if (isStale)
-        {
-            lines.Add("這是較舊的快取資料，不是最新查詢結果。");
-        }
-
-        lines.Add(HonestyNote);
-        return string.Join("\n", lines);
+        // The queue in parentheses carries the cross-queue fact on its own: "金 II · 15 LP
+        // （單雙排）" while playing Flex says which ladder this came from without spending a
+        // whole sentence on it. That is why CrossQueueNote no longer appears here -- it is
+        // still used for StatusText, where there is no room for parentheses.
+        var line = queue is null ? body : $"{body}（{queue.DisplayName}）";
+        // Staleness still has to be in words, not left to the cell's asterisk: AGENTS.md
+        // requires 新鮮度 be stated, and a three-hour-old rank read as current is exactly the
+        // failure that rule exists to prevent. Fresh data needs no caveat, so it gets none.
+        return isStale ? $"{line} · 較舊" : line;
     }
 
     /// <summary>
@@ -314,7 +297,7 @@ public static class OfficialRankAttachment
     private static OfficialRankDisplay Failure(HistoricalProfileAvailability availability)
     {
         var statusText = FailureStatusText(availability);
-        var tooltipText = BuildTooltipText($"官方牌位：{statusText}", profile: null, isStale: false);
+        var tooltipText = BuildRankLine(statusText, queue: null, isStale: false);
         return new OfficialRankDisplay(FailureMarker, statusText, IsStale: false, tooltipText);
     }
 

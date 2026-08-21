@@ -57,6 +57,12 @@ public sealed class OverlayWindow : Window
     private readonly List<AvatarView> _compactAvatars = [];
     private readonly List<PlayerRowView> _playerRows = [];
     private readonly List<TeamView> _teamViews = [];
+    // One column-header row per team card (see CreateColumnHeaderRow) -- populated whenever
+    // Expanded is built, cleared alongside everything else in BuildModeVisual. Kept as instance
+    // fields, not local to BuildExpanded, because a settings-only change (NameDisplayMode) must
+    // repaint the name header without a full mode rebuild -- see RefreshPlayerNameDisplay.
+    private readonly List<TextBlock> _nameColumnHeaders = [];
+    private readonly List<TextBlock> _metaColumnHeaders = [];
     private CancellationTokenSource _visualGenerationCancellation = new();
     private OverlaySnapshot _snapshot = OverlaySnapshot.Empty();
     private HistoricalProfilesResult? _historicalProfiles;
@@ -76,6 +82,9 @@ public sealed class OverlayWindow : Window
     private DipPoint _dragWindowOrigin;
     private bool _clamping;
     private IntPtr _windowHandle;
+    private Slider? _menuOpacitySlider;
+    private TextBlock? _menuOpacityValue;
+    private bool _suppressMenuOpacityChangedEvent;
 
     public OverlayWindow(AppSettings settings)
     {
@@ -89,7 +98,7 @@ public sealed class OverlayWindow : Window
         Focusable = false;
         ResizeMode = ResizeMode.NoResize;
         Mode = OverlayMode.Dot;
-        Opacity = settings.Opacity;
+        Opacity = OverlayOpacityPolicy.Clamp(settings.Opacity);
         Left = double.IsFinite(settings.Left) ? settings.Left : SystemParameters.WorkArea.Right - 58;
         Top = double.IsFinite(settings.Top) ? settings.Top : SystemParameters.WorkArea.Top + 96;
 
@@ -103,6 +112,20 @@ public sealed class OverlayWindow : Window
         DpiChanged += (_, _) => ClampToVisibleWorkArea();
         Closed += OnClosed;
         SystemEvents.DisplaySettingsChanged += OnDisplaySettingsChanged;
+
+        // Attached to the Window itself, not to Content, so it survives BuildModeVisual
+        // rebuilding Content on every mode switch -- one menu instance reachable by
+        // right-clicking anywhere on the overlay in Dot, Compact, or Expanded alike, at zero
+        // layout cost since a ContextMenu is a Popup, not part of any mode's fixed layout.
+        // SettingsWindow needs an explicit Owner (see its constructor comment) because it is
+        // its own top-level Window and once had a real bug where a missing Owner left it
+        // permanently behind this Topmost overlay. A ContextMenu does not have that failure
+        // mode: WPF opens it as a popup owned by whichever window it is attached to (this one)
+        // without any extra wiring, and an owned window always stacks above its owner, so it
+        // renders above the overlay -- and therefore above the game -- the same way the
+        // Settings dialog does, with no separate Topmost/Owner to remember here.
+        ContextMenu = BuildContextMenu();
+        ContextMenuOpening += OnContextMenuOpening;
 
         BuildModeVisual();
         UpdateVisibleControls();
@@ -119,6 +142,12 @@ public sealed class OverlayWindow : Window
     public event Action<double, double>? PositionChanged;
     public event Action? SettingsRequested;
     public event Action<Uri>? OpenExternalLinkRequested;
+    // Raised only for a user-driven drag of the right-click menu's opacity slider (see
+    // OnMenuOpacityChanged) -- not for the resync OnContextMenuOpening does on every open, and
+    // not for ApplySettings/the constructor. Mirrors PositionChanged: the App-level handler
+    // writes it into AppSettings and saves through the same debounced settings-save path
+    // dragging the overlay's position already uses, rather than a second persistence path.
+    public event Action<double>? OpacityChanged;
 
     public void ApplySnapshot(OverlaySnapshot snapshot)
     {
@@ -209,7 +238,7 @@ public sealed class OverlayWindow : Window
 
     public void ApplySettings(AppSettings settings)
     {
-        Opacity = Math.Clamp(settings.Opacity, 0.35, 1);
+        Opacity = OverlayOpacityPolicy.Clamp(settings.Opacity);
         SetPositionLocked(settings.PositionLocked);
         if (!double.IsFinite(settings.Left) || !double.IsFinite(settings.Top))
         {
@@ -217,7 +246,184 @@ public sealed class OverlayWindow : Window
         }
 
         ClampToVisibleWorkArea();
+
+        // A NameDisplayMode change does not touch OverlaySnapshot at all, so nothing about it
+        // ever shows up in an OverlaySnapshotDiff -- unlike PositionLocked/Opacity above, the
+        // rows have to be told about it explicitly here, or the new choice would only take
+        // effect after the next unrelated snapshot update (or a mode switch) rebuilds them.
+        if (_settings.NameDisplayMode != settings.NameDisplayMode)
+        {
+            _settings.NameDisplayMode = settings.NameDisplayMode;
+            RefreshPlayerNameDisplay();
+        }
     }
+
+    /// <summary>
+    /// Repaints the name column header and every currently visible player row's name cell from
+    /// <see cref="_settings"/>.NameDisplayMode and the existing <see cref="_snapshot"/> -- no
+    /// new data is fetched, this only changes which already-known field of each
+    /// <see cref="OverlayPlayer"/> is shown (see <see cref="PlayerNameDisplay.Resolve"/>).
+    /// Safe to call outside Expanded mode: the header list only has entries when Expanded has
+    /// actually been built at least once, and the row loop below is skipped entirely otherwise.
+    /// </summary>
+    private void RefreshPlayerNameDisplay()
+    {
+        var headerText = PlayerNameDisplay.ColumnHeader(_settings.NameDisplayMode);
+        foreach (var header in _nameColumnHeaders)
+        {
+            header.Text = headerText;
+        }
+
+        if (Mode != OverlayMode.Expanded)
+        {
+            return;
+        }
+
+        var teams = _snapshot.Teams.Take(2).ToArray();
+        for (var teamIndex = 0; teamIndex < _teamViews.Count; teamIndex++)
+        {
+            var team = teams.ElementAtOrDefault(teamIndex);
+            if (team is null)
+            {
+                continue;
+            }
+
+            var rows = _teamViews[teamIndex].Rows;
+            for (var rowIndex = 0; rowIndex < rows.Count; rowIndex++)
+            {
+                var player = team.Players.ElementAtOrDefault(rowIndex);
+                if (player is not null)
+                {
+                    UpdatePlayerName(rows[rowIndex], player);
+                }
+            }
+        }
+    }
+
+    /// <summary>
+    /// Right-click reachability for the opacity slider (「一邊拉動透明度條的時候需要能即時反饋」--
+    /// the same live control the Settings dialog has, but reachable mid-game in every mode
+    /// without opening Settings, since Dot and Compact never show a settings button at all).
+    /// Built once and attached to the Window itself in the constructor, not to Content, so
+    /// mode switches (which rebuild Content -- see BuildModeVisual) never disturb it.
+    /// </summary>
+    private ContextMenu BuildContextMenu()
+    {
+        var menu = new ContextMenu
+        {
+            Background = new SolidColorBrush(Color.FromArgb(248, 17, 23, 34)),
+            BorderBrush = new SolidColorBrush(Color.FromArgb(150, 75, 91, 118)),
+            BorderThickness = new Thickness(1),
+            Foreground = Brushes.White
+        };
+
+        var headerRow = new Grid { Margin = new Thickness(10, 8, 10, 2) };
+        headerRow.ColumnDefinitions.Add(new ColumnDefinition());
+        headerRow.ColumnDefinitions.Add(new ColumnDefinition { Width = GridLength.Auto });
+        var heading = Text("透明度", 12.5, "#DCE8F8", FontWeights.SemiBold);
+        _menuOpacityValue = Text(string.Empty, 12.5, "#B9C7DB", FontWeights.SemiBold, HorizontalAlignment.Right);
+        Grid.SetColumn(_menuOpacityValue, 1);
+        headerRow.Children.Add(heading);
+        headerRow.Children.Add(_menuOpacityValue);
+
+        _menuOpacitySlider = new Slider
+        {
+            Minimum = OverlayOpacityPolicy.Minimum,
+            Maximum = OverlayOpacityPolicy.Maximum,
+            Value = OverlayOpacityPolicy.Clamp(_settings.Opacity),
+            TickFrequency = 0.05,
+            IsSnapToTickEnabled = true,
+            Width = 200,
+            Margin = new Thickness(10, 0, 10, 8)
+        };
+        _menuOpacitySlider.ValueChanged += OnMenuOpacityChanged;
+        UpdateMenuOpacityValueLabel(_menuOpacitySlider.Value);
+
+        var content = new StackPanel();
+        content.Children.Add(headerRow);
+        content.Children.Add(_menuOpacitySlider);
+
+        var opacityItem = new MenuItem
+        {
+            // Keeps the menu open through the whole drag gesture instead of treating the
+            // first tick as an item click and closing -- the same mechanism WPF offers for
+            // checkable items that should stay visible after being toggled.
+            StaysOpenOnClick = true,
+            Header = content
+        };
+        menu.Items.Add(opacityItem);
+        menu.Items.Add(new Separator());
+
+        var openSettings = new MenuItem { Header = "開啟設定…", Foreground = Brushes.White };
+        openSettings.Click += (_, _) => SettingsRequested?.Invoke();
+        menu.Items.Add(openSettings);
+
+        return menu;
+    }
+
+    private void OnContextMenuOpening(object sender, ContextMenuEventArgs e)
+    {
+        if (!OverlayContextMenuPolicy.CanOpen(Mode, IsPositionLocked))
+        {
+            // Locked overlays are click-through by design (see ApplyWindowInteractionStyle
+            // and the WM_NCHITTEST handling in WndProc below): the whole overlay stops
+            // receiving mouse input while locked, so WPF should never even dispatch this
+            // event in that state. This guard is defence in depth, and the one place the
+            // rule is written down and unit-tested (see OverlayContextMenuPolicy) instead of
+            // relying only on that emergent side effect -- it must not be "fixed" by
+            // weakening the lock.
+            e.Handled = true;
+            return;
+        }
+
+        if (_menuOpacitySlider is null)
+        {
+            return;
+        }
+
+        // The opacity may have changed since the menu was last open (e.g. via the Settings
+        // dialog), so the slider is resynced to what is actually in effect right now rather
+        // than wherever it was last left. Suppressed so this resync does not itself look
+        // like a user edit and trigger a settings save (see OnMenuOpacityChanged).
+        _suppressMenuOpacityChangedEvent = true;
+        try
+        {
+            _menuOpacitySlider.Value = OverlayOpacityPolicy.Clamp(_settings.Opacity);
+        }
+        finally
+        {
+            _suppressMenuOpacityChangedEvent = false;
+        }
+
+        UpdateMenuOpacityValueLabel(_menuOpacitySlider.Value);
+    }
+
+    private void OnMenuOpacityChanged(object sender, RoutedPropertyChangedEventArgs<double> e)
+    {
+        var previewed = OverlayOpacityPolicy.Clamp(e.NewValue);
+        Opacity = previewed;
+        UpdateMenuOpacityValueLabel(previewed);
+        if (_suppressMenuOpacityChangedEvent)
+        {
+            return;
+        }
+
+        _settings.Opacity = previewed;
+        OpacityChanged?.Invoke(previewed);
+    }
+
+    private void UpdateMenuOpacityValueLabel(double opacity)
+    {
+        if (_menuOpacityValue is not null)
+        {
+            _menuOpacityValue.Text = FormatOpacityPercent(opacity);
+        }
+    }
+
+    // Manual percentage formatting instead of "P0" -- some cultures insert a space before the
+    // percent sign under that format specifier, which is not how percentages read elsewhere in
+    // this UI (see SettingsWindow.FormatOpacityPercent, kept in sync with the same rule).
+    private static string FormatOpacityPercent(double opacity) => $"{(int)Math.Round(opacity * 100)}%";
 
     public void ShowWithoutActivation()
     {
@@ -240,6 +446,8 @@ public sealed class OverlayWindow : Window
         _compactAvatars.Clear();
         _playerRows.Clear();
         _teamViews.Clear();
+        _nameColumnHeaders.Clear();
+        _metaColumnHeaders.Clear();
         _headerRun = null;
         _summaryRun = null;
         _dot = null;
@@ -462,6 +670,7 @@ public sealed class OverlayWindow : Window
         heading.Children.Add(name);
         heading.Children.Add(score);
         stack.Children.Add(heading);
+        stack.Children.Add(CreateColumnHeaderRow());
         var rows = new List<PlayerRowView>(5);
         for (var index = 0; index < 5; index++)
         {
@@ -473,6 +682,99 @@ public sealed class OverlayWindow : Window
 
         root.Child = stack;
         return new TeamView(root, name, score, rows);
+    }
+
+    /// <summary>
+    /// One header row per team card, not one shared across both -- see the width comment in
+    /// <see cref="CreatePlayerRow"/>: each card already owns its own Padding(7), and the row
+    /// grid's own Padding(4,0,5,0) is relative to that. Building a single header spanning both
+    /// cards would mean re-deriving that same offset twice inside one wider container instead of
+    /// reusing it; a header scoped to each card can instead share <see cref="AddPlayerRowColumns"/>
+    /// with the data rows below it, so the two are pixel-aligned by construction, never by
+    /// coincidence. This costs no extra height over a shared header either: the two cards sit
+    /// side by side in <see cref="BuildExpanded"/>'s teamsGrid, not stacked, so the panel only
+    /// grows by one header row's height, not two.
+    ///
+    /// Deliberately labels all four data columns (name, meta, rank, score), not just the two the
+    /// user asked for (meta/rank had none at all before this change) -- a row with two labelled
+    /// columns and two silently unlabelled ones reads as broken formatting, not as "these two
+    /// don't need one". The avatar column alone stays blank: it is a picture, and at 28px wide
+    /// there is no room for a word that would say anything a glance at the portrait does not
+    /// already say. Every label is smaller (10px vs. 12.5-17px for the data below it) and dimmer
+    /// (#7A879C vs. the data columns' own colours) so the row of labels reads as subordinate
+    /// captioning, not as a fifth row of data competing with the real numbers.
+    /// </summary>
+    private Grid CreateColumnHeaderRow()
+    {
+        var grid = new Grid { Margin = new Thickness(4, 0, 5, 3) };
+        AddPlayerRowColumns(grid);
+
+        var name = Text(
+            PlayerNameDisplay.ColumnHeader(_settings.NameDisplayMode),
+            10,
+            "#7A879C",
+            FontWeights.SemiBold);
+        // Matches the champion cell's own Margin(2,0,6,0) below (see CreatePlayerRow) so the
+        // label's left edge lines up with the text it is labelling, not just the column.
+        name.Margin = new Thickness(2, 0, 6, 0);
+        Grid.SetColumn(name, 1);
+        grid.Children.Add(name);
+        _nameColumnHeaders.Add(name);
+
+        // "順位" during champ select, "裝備值" during a live game -- never "經濟" (AGENTS.md:
+        // the client only exposes the local player's unspent gold, so a summed item-value total
+        // is not the same thing as economy). Matches whichever of the two UpdatePlayerMeta is
+        // actually filling the cell with for the phase this panel was built for; the choice is
+        // fixed at build time and does not need to react to ApplySettings the way the name
+        // header does, since only a structural rebuild (BuildModeVisual) ever changes
+        // _visualWasChampSelect, and that rebuild calls this method fresh.
+        var meta = Text(
+            _visualWasChampSelect ? "順位" : "裝備值",
+            10,
+            "#7A879C",
+            FontWeights.SemiBold,
+            HorizontalAlignment.Right);
+        Grid.SetColumn(meta, 2);
+        grid.Children.Add(meta);
+        _metaColumnHeaders.Add(meta);
+
+        var rank = Text("牌位", 10, "#7A879C", FontWeights.SemiBold, HorizontalAlignment.Right);
+        Grid.SetColumn(rank, 3);
+        grid.Children.Add(rank);
+
+        var score = Text("分數", 10, "#7A879C", FontWeights.SemiBold, HorizontalAlignment.Right);
+        Grid.SetColumn(score, 4);
+        grid.Children.Add(score);
+
+        return grid;
+    }
+
+    /// <summary>
+    /// The five column widths shared by every player row and by <see cref="CreateColumnHeaderRow"/>
+    /// above them, so header and data can never drift out of alignment. Column widths were
+    /// rebalanced, not just extended, when the rank column was added: avatar 34->28, meta
+    /// 42->38, score 46->34 (each still comfortably fits its longest real value -- three
+    /// digits, "#10", "99.9k"), freeing exactly the width the new rank column needs so the
+    /// champion name's share of the row is unchanged.
+    ///
+    /// These five widths are unchanged again here for the cross-queue fallback mark (see
+    /// OfficialRankDisplay.IsFromDifferentQueue): a dotted underline is a TextDecoration on
+    /// the existing rank TextBlock, not additional characters, so it costs no horizontal
+    /// space at all. Worked from BuildExpanded/CreateTeamView: window 520px, teamsGrid
+    /// Margin(10,0,10,8) leaves 500px for two team columns plus a 12px gutter, so each team
+    /// column is (500-12)/2 = 244px; the team card's Padding(7) leaves 244-14 = 230px; this
+    /// row's own Padding(4,0,5,0) leaves 230-9 = 221px; the four OTHER fixed columns
+    /// (28+38+25+34 = 125px) leave the champion column exactly 221-125 = 96px, same as
+    /// before this change, because the rank column's own 25px did not move. See
+    /// CrossQueueRankDecorations and UpdatePlayerRank.
+    /// </summary>
+    private static void AddPlayerRowColumns(Grid grid)
+    {
+        grid.ColumnDefinitions.Add(new ColumnDefinition { Width = new GridLength(28) });
+        grid.ColumnDefinitions.Add(new ColumnDefinition());
+        grid.ColumnDefinitions.Add(new ColumnDefinition { Width = new GridLength(38) });
+        grid.ColumnDefinitions.Add(new ColumnDefinition { Width = new GridLength(25) });
+        grid.ColumnDefinitions.Add(new ColumnDefinition { Width = new GridLength(34) });
     }
 
     private PlayerRowView CreatePlayerRow()
@@ -493,26 +795,7 @@ public sealed class OverlayWindow : Window
             CornerRadius = new CornerRadius(6)
         };
         var grid = new Grid();
-        // Column widths were rebalanced, not just extended, when the rank column was added:
-        // avatar 34->28, meta 42->38, score 46->34 (each still comfortably fits its longest
-        // real value -- three digits, "#10", "99.9k"), freeing exactly the width the new
-        // rank column needs so the champion name's share of the row is unchanged.
-        //
-        // These five widths are unchanged again here for the cross-queue fallback mark (see
-        // OfficialRankDisplay.IsFromDifferentQueue): a dotted underline is a TextDecoration on
-        // the existing rank TextBlock, not additional characters, so it costs no horizontal
-        // space at all. Worked from BuildExpanded/CreateTeamView: window 520px, teamsGrid
-        // Margin(10,0,10,8) leaves 500px for two team columns plus a 12px gutter, so each team
-        // column is (500-12)/2 = 244px; the team card's Padding(7) leaves 244-14 = 230px; this
-        // row's own Padding(4,0,5,0) leaves 230-9 = 221px; the four OTHER fixed columns
-        // (28+38+25+34 = 125px) leave the champion column exactly 221-125 = 96px, same as
-        // before this change, because the rank column's own 25px did not move. See
-        // CrossQueueRankDecorations and UpdatePlayerRank.
-        grid.ColumnDefinitions.Add(new ColumnDefinition { Width = new GridLength(28) });
-        grid.ColumnDefinitions.Add(new ColumnDefinition());
-        grid.ColumnDefinitions.Add(new ColumnDefinition { Width = new GridLength(38) });
-        grid.ColumnDefinitions.Add(new ColumnDefinition { Width = new GridLength(25) });
-        grid.ColumnDefinitions.Add(new ColumnDefinition { Width = new GridLength(34) });
+        AddPlayerRowColumns(grid);
         var avatar = CreateAvatar(26);
         grid.Children.Add(avatar.Root);
         var champion = Text(string.Empty, 13, "#EEF3FA", FontWeights.SemiBold);
@@ -816,7 +1099,7 @@ public sealed class OverlayWindow : Window
         }
 
         UpdateAvatar(view.Avatar, player);
-        view.Champion.Text = player.ChampionName;
+        UpdatePlayerName(view, player);
         view.Score.Text = player.PerformanceScore.HasValue ? $"{player.PerformanceScore:0}" : "—";
         view.Score.Foreground = Brush(ScoreColor(player.PerformanceScore));
         UpdatePlayerMeta(view, player);
@@ -831,19 +1114,20 @@ public sealed class OverlayWindow : Window
     /// in words, and the Riot-vs-this-game separation AGENTS.md rule 9 requires); this adapter
     /// only ever displays that string, it does not decide any of its wording.
     /// </summary>
-    private static void UpdateRowTooltip(PlayerRowView view, OverlayPlayer player)
-    {
-        var reading = player.PerformanceLabel is null
-            ? player.IsAnonymous ? "匿名" : "尚未開始"
-            : $"{player.PerformanceLabel} · {ConfidenceText(player.Confidence)}";
-        var tooltip = $"{player.DisplayName}\n{player.ChampionName} · {reading}";
-        if (!string.IsNullOrEmpty(player.OfficialRank?.TooltipText))
-        {
-            tooltip += $"\n\n{player.OfficialRank.TooltipText}";
-        }
+    // All three lines are composed in Core (see RowTooltip) so they can be asserted directly;
+    // this adapter only hands the string to WPF.
+    private static void UpdateRowTooltip(PlayerRowView view, OverlayPlayer player) =>
+        view.Root.ToolTip = RowTooltip.Compose(player);
 
-        view.Root.ToolTip = tooltip;
-    }
+    /// <summary>
+    /// The name column's text: Core decides between the champion name and the Riot ID (and
+    /// guarantees anonymous players never get the latter) -- this adapter only ever displays
+    /// the string <see cref="PlayerNameDisplay.Resolve"/> returns. See
+    /// <see cref="_settings"/>.NameDisplayMode and <see cref="RefreshPlayerNameDisplay"/> for
+    /// how a setting change reaches an already-built row without a full rebuild.
+    /// </summary>
+    private void UpdatePlayerName(PlayerRowView view, OverlayPlayer player) =>
+        view.Champion.Text = PlayerNameDisplay.Resolve(player, _settings.NameDisplayMode);
 
     /// <summary>
     /// Pick number during champ select, carried equipment value during a game. Labelled
@@ -924,9 +1208,14 @@ public sealed class OverlayWindow : Window
             UpdateAvatar(view.Avatar, player);
         }
 
-        if ((fields & OverlayPlayerFields.ChampionName) != 0)
+        // DisplayName and IsAnonymous, not just ChampionName, because PlayerNameDisplay.Resolve
+        // reads all three -- a Riot-ID-mode row must repaint if the revealed name changes or a
+        // seat's anonymity flips, not only when the champion itself changes.
+        if ((fields & (OverlayPlayerFields.ChampionName |
+                       OverlayPlayerFields.DisplayName |
+                       OverlayPlayerFields.IsAnonymous)) != 0)
         {
-            view.Champion.Text = player.ChampionName;
+            UpdatePlayerName(view, player);
         }
 
         if ((fields & OverlayPlayerFields.PerformanceScore) != 0)
@@ -1447,14 +1736,6 @@ public sealed class OverlayWindow : Window
         >= 25d => "#FFBE72",
         null => "#7E8BA0",
         _ => "#FF7D8E"
-    };
-
-    private static string ConfidenceText(PerformanceConfidence? confidence) => confidence switch
-    {
-        PerformanceConfidence.High => "高信心",
-        PerformanceConfidence.Medium => "中信心",
-        PerformanceConfidence.Low => "低信心",
-        _ => "資料不足"
     };
 
     private SolidColorBrush DotBrush()
