@@ -118,7 +118,7 @@ public sealed class OverlayWindow : Window
         // right-clicking anywhere on the overlay in Dot, Compact, or Expanded alike, at zero
         // layout cost since a ContextMenu is a Popup, not part of any mode's fixed layout.
         // SettingsWindow needs an explicit Owner (see its constructor comment) because it is
-        // its own top-level Window and once had a real bug where a missing Owner left it
+        // a separate Window of its own and once had a real bug where a missing Owner left it
         // permanently behind this Topmost overlay. A ContextMenu does not have that failure
         // mode: WPF opens it as a popup owned by whichever window it is attached to (this one)
         // without any extra wiring, and an owned window always stacks above its owner, so it
@@ -144,7 +144,7 @@ public sealed class OverlayWindow : Window
     public event Action<Uri>? OpenExternalLinkRequested;
     // Raised only for a user-driven drag of the right-click menu's opacity slider (see
     // OnMenuOpacityChanged) -- not for the resync OnContextMenuOpening does on every open, and
-    // not for ApplySettings/the constructor. Mirrors PositionChanged: the App-level handler
+    // not for ApplySettings/the constructor. Mirrors PositionChanged: the handler in App
     // writes it into AppSettings and saves through the same debounced settings-save path
     // dragging the overlay's position already uses, rather than a second persistence path.
     public event Action<double>? OpacityChanged;
