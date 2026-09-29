@@ -1,8 +1,12 @@
 using System.Reflection;
 using System.IO;
+using System.Runtime.ExceptionServices;
+using System.Runtime.InteropServices;
 using System.Windows.Controls;
 using System.Windows.Documents;
+using System.Windows.Threading;
 using LolPerformanceOverlay.Core;
+using LolPerformanceOverlay.Core.Interaction;
 using LolPerformanceOverlay.Core.Presentation;
 using LolPerformanceOverlay.Services;
 using LolPerformanceOverlay.UI;
@@ -68,6 +72,70 @@ public sealed class WindowsAdapterTests
         Assert.True(GlobalHotkey.TryParse("Ctrl+Shift+O", out var modifiers, out var virtualKey));
         Assert.NotEqual(0u, modifiers);
         Assert.NotEqual(0, virtualKey);
+    }
+
+    [Fact]
+    public void DisplayMonitorsListEveryMonitorWithOnePrimaryAndTheWorkAreaInsideIt()
+    {
+        var displays = DisplayMonitors.Enumerate(96, 96);
+
+        Assert.NotEmpty(displays);
+        Assert.Single(displays, display => display.IsPrimary);
+        Assert.All(displays, display =>
+        {
+            Assert.True(display.WorkArea.IsValid);
+            Assert.InRange(display.WorkArea.X, display.MonitorBounds.X, display.MonitorBounds.Right);
+            Assert.InRange(display.WorkArea.Y, display.MonitorBounds.Y, display.MonitorBounds.Bottom);
+            Assert.InRange(display.WorkArea.Right, display.MonitorBounds.X, display.MonitorBounds.Right);
+            Assert.InRange(display.WorkArea.Bottom, display.MonitorBounds.Y, display.MonitorBounds.Bottom);
+            Assert.True(display.DpiX >= 96 && display.DpiY >= 96);
+        });
+        Assert.Equal(displays.Count, DisplayTopologyConverter.ToDips(displays).Count);
+    }
+
+    [Fact]
+    public void TrayMenuTogglesReportTheNewStateAndProgrammaticUpdatesStayQuiet()
+    {
+        RunOnStaThread(() =>
+        {
+            using var tray = new TrayIconService(startupEnabled: false, positionLocked: false);
+            var locked = new List<bool>();
+            var startup = new List<bool>();
+            tray.PositionLockedChanged += locked.Add;
+            tray.StartupChanged += startup.Add;
+
+            tray.Execute(TrayCommand.TogglePositionLocked);
+            tray.Execute(TrayCommand.TogglePositionLocked);
+            // The settings dialog locked it; the tray must follow without echoing the change back.
+            tray.UpdatePositionLocked(true);
+            tray.Execute(TrayCommand.TogglePositionLocked);
+            tray.UpdateStartup(true);
+            tray.Execute(TrayCommand.ToggleStartup);
+
+            Assert.Equal([true, false, false], locked);
+            Assert.Equal([false], startup);
+        });
+    }
+
+    [Fact]
+    public void DoubleClickingTheTrayIconRequestsTheNextOverlayMode()
+    {
+        RunOnStaThread(() =>
+        {
+            const int doubleClick = 0x0203;
+            using var tray = new TrayIconService(startupEnabled: false, positionLocked: false);
+            var cycles = 0;
+            tray.CycleRequested += () => cycles++;
+
+            SendMessage(
+                tray.WindowHandle,
+                TrayIconService.CallbackMessage,
+                IntPtr.Zero,
+                (IntPtr)(doubleClick | (TrayIconService.IconId << 16)));
+            Dispatcher.CurrentDispatcher.Invoke(() => { }, DispatcherPriority.Background);
+
+            Assert.Equal(1, cycles);
+        });
     }
 
     [Fact]
@@ -290,6 +358,34 @@ public sealed class WindowsAdapterTests
         // A parsed key must also survive the gate EnsureChampionIconAsync re-applies before download.
         Assert.True(StaticAssetPolicy.IsChampionKey(byId[2081].Key));
     }
+
+    // Win32 windows and WPF dispatchers both need an STA thread of their own.
+    private static void RunOnStaThread(Action body)
+    {
+        Exception? exception = null;
+        var thread = new Thread(() =>
+        {
+            try
+            {
+                body();
+            }
+            catch (Exception ex)
+            {
+                exception = ex;
+            }
+        });
+        thread.SetApartmentState(ApartmentState.STA);
+        thread.Start();
+        thread.Join();
+
+        if (exception is not null)
+        {
+            ExceptionDispatchInfo.Capture(exception).Throw();
+        }
+    }
+
+    [DllImport("user32.dll")]
+    private static extern IntPtr SendMessage(IntPtr window, int message, IntPtr wParam, IntPtr lParam);
 
     private sealed class NullStaticGameDataProvider : IStaticGameDataProvider
     {
