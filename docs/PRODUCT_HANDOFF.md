@@ -763,7 +763,25 @@ WinForms 原本只用在系統匣（`NotifyIcon`＋`ContextMenuStrip`）與 `Scr
 
 工作管理員的數字沒變：WinForms 的 assembly 本來就是從 EXE 映射進來，實際碰到的頁面很少。收穫是朋友下載少約 10 MB（15%）、解壓後的 EXE 少 32 MB。記憶體量測用的 EXE，選單位置還是 wParam 錨點版；改成 `GetCursorPos` 後重新量了大小與啟動時間。
 
-量測時查了程式的 DPI 感知模式，改動前後都是 **system aware**，不是 PerMonitorV2。原因是 csproj 的 `ApplicationHighDpiMode=PerMonitorV2` 只給 WinForms 的 `ApplicationConfiguration` 產生器用，對 WPF 無效，而 `app.manifest` 沒有 `dpiAwareness`。影響是混合 DPI 時，非主螢幕上的 overlay 會被 Windows 點陣縮放而變糊，`GetDpiForMonitor` 對每台螢幕也都回報系統 DPI。修正會牽動座標換算與已存的位置，要在混合 DPI 的真機上驗證，所以沒放進這個 PR。
+量測時查了程式的 DPI 感知模式，改動前後都是 **system aware**，不是 PerMonitorV2。原因是 csproj 的 `ApplicationHighDpiMode=PerMonitorV2` 只給 WinForms 的 `ApplicationConfiguration` 產生器用，對 WPF 無效，而 `app.manifest` 沒有 `dpiAwareness`。影響是混合 DPI 時，非主螢幕上的 overlay 會被 Windows 點陣縮放而變糊，`GetDpiForMonitor` 對每台螢幕也都回報系統 DPI。修正會牽動座標換算與已存的位置，要在混合 DPI 的真機上驗證，所以沒放進這個 PR。[狀態：已開 issue #19，下一個 session 處理。]
+
+### 系統匣名稱對齊、設定視窗被裁切
+
+- 同一個動作原本在各處叫法不同，朋友照著說明頁找會對不上：
+  - 開機啟動：系統匣寫「登入 Windows 後常駐」，設定視窗寫「登入 Windows 後自動常駐」，說明頁寫「登入 Windows 後自動啟動」。
+  - 說明頁寫「顯示」「重設位置」「鎖定位置」，實際選單是「顯示／切換」「重設 Overlay 位置」「鎖定 Overlay 位置」。
+- 現在統一成選單上的字，開機啟動用最白話的「登入 Windows 後自動啟動」。名稱集中在 `Services/ActionLabels.cs`，系統匣與設定視窗都從那裡取用。
+- 新增一項 Windows 測試：說明頁中提到系統匣的句子，引號裡的名稱都必須是真的選單項目，而且主要項目都要提到。把說明頁改回舊名、或把選單改名，這項測試都會失敗。
+- 說明頁也補上：
+  - 圖示是橘色圓點，右鍵開選單。
+  - 快捷鍵衝突時會跳出 Windows 通知。原本寫「系統匣設定會顯示」，不準確。
+- 截圖時發現設定視窗自 PR #14 起就被裁切：
+  - 高度寫死 540，加上官方牌位說明後內容超出，「儲存」那排按鈕只露出上半截。
+  - 說明文字沒有換行，右半邊被切掉。
+- 改法：
+  - 高度跟著內容走，上限是工作區高度，超出時可以捲動。
+  - 說明文字自動換行。
+- 另一項新的 Windows 測試實際打開設定視窗，檢查每行文字都在視窗內、「儲存」看得到或捲得到。改回原本的排版會失敗：「儲存」底部在 543 DIP，但視窗只顯示到 503 DIP。拿掉換行也會失敗。
 
 ### 評估中：改用 Rust 重寫（待使用者決定）
 
