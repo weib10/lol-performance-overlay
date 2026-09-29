@@ -213,13 +213,13 @@ public sealed class TrayIconService : IDisposable
         _menuOpen = true;
         try
         {
-            Append(menu, TrayCommand.Cycle, "顯示／切換");
-            Append(menu, TrayCommand.ResetPosition, "重設 Overlay 位置");
-            Append(menu, TrayCommand.TogglePositionLocked, "鎖定 Overlay 位置", _positionLocked);
-            Append(menu, TrayCommand.Settings, "設定");
-            Append(menu, TrayCommand.ToggleStartup, "登入 Windows 後常駐", _startupEnabled);
+            Append(menu, TrayCommand.Cycle, ActionLabels.ShowOrCycle);
+            Append(menu, TrayCommand.ResetPosition, ActionLabels.ResetPosition);
+            Append(menu, TrayCommand.TogglePositionLocked, ActionLabels.LockPosition, _positionLocked);
+            Append(menu, TrayCommand.Settings, ActionLabels.Settings);
+            Append(menu, TrayCommand.ToggleStartup, ActionLabels.StartWithWindows, _startupEnabled);
             AppendMenu(menu, MfSeparator, UIntPtr.Zero, null);
-            Append(menu, TrayCommand.Exit, "結束");
+            Append(menu, TrayCommand.Exit, ActionLabels.Exit);
             // Bold marks what a double-click on the icon does.
             SetMenuDefaultItem(menu, (uint)TrayCommand.Cycle, 0);
 

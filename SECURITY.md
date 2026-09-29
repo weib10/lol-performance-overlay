@@ -35,7 +35,7 @@ Repository 內的共用 PackageBuilder 會在建立 ZIP 前失敗攔截：
 
 ## 本機保存與移除
 
-設定與 Riot 公開素材快取位於 `%LOCALAPPDATA%\LolPerformanceOverlay`。使用者從系統匣關閉 Windows 自動啟動、結束程式、刪除 EXE／HTML／ZIP，再刪除該資料夾，即可移除本工具資料。程式不安裝系統服務或驅動程式。
+設定與 Riot 公開素材快取位於 `%LOCALAPPDATA%\LolPerformanceOverlay`。使用者從系統匣取消勾選「登入 Windows 後自動啟動」、結束程式、刪除 EXE／HTML／ZIP，再刪除該資料夾，即可移除本工具資料。程式不安裝系統服務或驅動程式。
 
 ## 回報安全問題
 

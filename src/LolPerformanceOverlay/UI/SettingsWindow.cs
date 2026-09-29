@@ -52,7 +52,7 @@ public sealed class SettingsWindow : Window
 
         _startup = new CheckBox
         {
-            Content = "登入 Windows 後自動常駐",
+            Content = ActionLabels.StartWithWindows,
             IsChecked = settings.StartWithWindows,
             Margin = new Thickness(0, 20, 0, 14),
             Foreground = Brushes.White
@@ -61,7 +61,7 @@ public sealed class SettingsWindow : Window
 
         _positionLocked = new CheckBox
         {
-            Content = "鎖定 Overlay 位置（整個 Overlay 不接收滑鼠）",
+            Content = $"{ActionLabels.LockPosition}（整個 Overlay 不接收滑鼠）",
             IsChecked = settings.PositionLocked,
             Margin = new Thickness(0, 0, 0, 14),
             Foreground = Brushes.White
@@ -164,7 +164,7 @@ public sealed class SettingsWindow : Window
             HorizontalAlignment = HorizontalAlignment.Right,
             Margin = new Thickness(0, 20, 0, 0)
         };
-        var reset = Button("重設位置");
+        var reset = Button(ActionLabels.ResetPosition);
         reset.Click += (_, _) =>
         {
             _working.Left = double.NaN;
