@@ -508,6 +508,55 @@ internal static class PackageBuilder
                 TimeSpan.FromSeconds(2)))
             .ToArray();
 
+    // The published EXE decodes to views of up to ~165 million characters. One regex pass over a
+    // whole view has to finish inside the per-regex timeout, which an uncompressed single-file EXE
+    // does not do reliably on a CI runner. Scanning window by window keeps each call small without
+    // loosening any pattern: every window carries OverlapLength characters of real context on both
+    // sides, and a match counts only in the window where it starts. Any match shorter than the
+    // overlap is therefore found exactly as a whole-text scan would find it, including patterns
+    // whose \b or lookaround depends on the characters around the match.
+    internal const int ScanChunkLength = 4 * 1024 * 1024;
+    internal const int ScanOverlapLength = 64 * 1024;
+
+    internal static bool ContainsMatch(
+        Regex regex,
+        string text,
+        int chunkLength = ScanChunkLength,
+        int overlapLength = ScanOverlapLength)
+    {
+        if (text.Length <= chunkLength)
+        {
+            return regex.IsMatch(text);
+        }
+
+        for (var chunkStart = 0; chunkStart < text.Length; chunkStart += chunkLength)
+        {
+            var chunkEnd = (int)Math.Min(text.Length, (long)chunkStart + chunkLength);
+            var windowStart = Math.Max(0, chunkStart - overlapLength);
+            var windowEnd = (int)Math.Min(text.Length, (long)chunkEnd + overlapLength);
+            foreach (var match in regex.EnumerateMatches(text.AsSpan(windowStart, windowEnd - windowStart)))
+            {
+                var index = windowStart + match.Index;
+                if (index < chunkStart)
+                {
+                    // Starts in the leading context, where the window's own edge may have cut
+                    // off the characters \b or a lookbehind needs; the previous window owns it.
+                    continue;
+                }
+
+                if (index >= chunkEnd)
+                {
+                    // The next window owns it and sees it with its leading context intact.
+                    break;
+                }
+
+                return true;
+            }
+        }
+
+        return false;
+    }
+
     private static void AddRegexViolations(
         ICollection<string> violations,
         string relativePath,
@@ -1461,7 +1510,7 @@ internal static class PackageBuilder
         {
             foreach (var regex in binaryPatterns)
             {
-                if (regex.IsMatch(binaryText))
+                if (ContainsMatch(regex, binaryText))
                 {
                     throw new InvalidDataException("Published EXE contains a secret-like value or developer machine path.");
                 }
@@ -1470,7 +1519,7 @@ internal static class PackageBuilder
             var projectPdb = new Regex(
                 @"(?:LolPerformanceOverlay|PackageBuilder)[^\0\r\n]{0,120}\.pdb",
                 RegexOptions.IgnoreCase | RegexOptions.CultureInvariant);
-            if (projectPdb.IsMatch(binaryText))
+            if (ContainsMatch(projectPdb, binaryText))
             {
                 throw new InvalidDataException("Published EXE contains a project PDB filename or path.");
             }
