@@ -3,8 +3,10 @@ using System.IO;
 using System.Runtime.ExceptionServices;
 using System.Runtime.InteropServices;
 using System.Text.RegularExpressions;
+using System.Windows;
 using System.Windows.Controls;
 using System.Windows.Documents;
+using System.Windows.Media;
 using System.Windows.Threading;
 using LolPerformanceOverlay.Core;
 using LolPerformanceOverlay.Core.Interaction;
@@ -181,6 +183,48 @@ public sealed class WindowsAdapterTests
                 ActionLabels.Exit
             },
             quoted);
+    }
+
+    [Fact]
+    public void SettingsWindowKeepsEveryLineAndTheSaveButtonReachable()
+    {
+        RunOnStaThread(() =>
+        {
+            var window = new SettingsWindow(new AppSettings())
+            {
+                WindowStartupLocation = WindowStartupLocation.Manual,
+                Left = -20000,
+                Top = -20000,
+                ShowActivated = false
+            };
+            window.Show();
+            try
+            {
+                window.UpdateLayout();
+                // WPF arranges content that does not fit at its full size and clips it, so the
+                // content's own size says nothing; the window's client area is what is visible.
+                var client = (FrameworkElement)VisualTreeHelper.GetChild(window, 0);
+                var viewport = (FrameworkElement)window.Content;
+                var root = viewport is ScrollViewer scroll ? (FrameworkElement)scroll.Content : viewport;
+
+                // Text wider than the dialog is cut off at the right edge rather than wrapped.
+                Assert.All(LogicalDescendants<TextBlock>(root), text =>
+                    Assert.True(
+                        text.TranslatePoint(new Point(text.ActualWidth, 0), client).X <= client.ActualWidth + 0.5,
+                        $"'{text.Text}' runs past the dialog's right edge."));
+
+                // Save is either inside the visible area or inside a viewer that can scroll to it.
+                var save = LogicalDescendants<Button>(root).Single(button => Equals(button.Content, "儲存"));
+                var saveBottom = save.TranslatePoint(new Point(0, save.ActualHeight), client).Y;
+                var reachable = saveBottom <= client.ActualHeight + 0.5 ||
+                                viewport is ScrollViewer { ScrollableHeight: > 0 };
+                Assert.True(reachable, $"Save ends at {saveBottom:F0} DIP, below the {client.ActualHeight:F0} DIP the dialog shows.");
+            }
+            finally
+            {
+                window.Close();
+            }
+        });
     }
 
     [Fact]
@@ -402,6 +446,23 @@ public sealed class WindowsAdapterTests
 
         // A parsed key must also survive the gate EnsureChampionIconAsync re-applies before download.
         Assert.True(StaticAssetPolicy.IsChampionKey(byId[2081].Key));
+    }
+
+    private static IEnumerable<T> LogicalDescendants<T>(DependencyObject parent)
+        where T : DependencyObject
+    {
+        foreach (var child in LogicalTreeHelper.GetChildren(parent).OfType<DependencyObject>())
+        {
+            if (child is T match)
+            {
+                yield return match;
+            }
+
+            foreach (var descendant in LogicalDescendants<T>(child))
+            {
+                yield return descendant;
+            }
+        }
     }
 
     private static string FindRepositoryRoot()
