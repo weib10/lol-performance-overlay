@@ -664,7 +664,7 @@ ARAM 以前完全不打 Riot API；現在每一場 ARAM 都會對每位有 Riot 
 
 ### 相容性
 
-- 官方 .NET 10 breaking changes 清單裡跟這個專案有關的只有兩條，都沒踩到：WPF 與 WinForms 並用時 `ContextMenu`／`MenuItem` 要消歧（`TrayIconService` 本來就用 `Forms.` alias）；單檔 app 不再到 EXE 目錄找 native library（`IncludeNativeLibrariesForSelfExtract=true`，native 都包在 EXE 內）。
+- 官方 .NET 10 breaking changes 清單裡跟這個專案有關的只有兩條，都沒踩到：WPF 與 WinForms 並用時 `ContextMenu`／`MenuItem` 要消歧（`TrayIconService` 本來就用 `Forms.` alias）；單檔 app 不再到 EXE 目錄找 native library（`IncludeNativeLibrariesForSelfExtract=true`，native 都包在 EXE 內）。[狀態：PR #18 拿掉 WinForms 之後，第一條不再適用。]
 - Windows 支援：.NET 10 官方支援清單只列 Windows 11 與 Windows 10 企業／IoT 長期服務版。一般家用 Windows 10 22H2 技術上可以執行，但不在微軟支援範圍，也還沒實機驗證。README 已註明；朋友 HTML 仍寫「Windows 10／11 x64」，要不要改是產品決定，尚未處理。[狀態：使用者同意改寫。朋友 HTML 頁首改為「Windows 11 x64」，疑難排解新增「我的電腦是 Windows 10」一條，白話說明未驗證、不保證；README 開頭與第 3 節平台同步。]
 
 ### 驗證
@@ -707,10 +707,68 @@ ARAM 以前完全不打 Riot API；現在每一場 ARAM 都會對每位有 Riot 
 
 中位數從 174 MB 降到 88 MB。改後第 1 次偏高（最低 95 MB），是這份新 EXE 的第一次啟動，原因沒有查。CPU 兩者都約占全機 0.1%。
 
+### 拿掉 WinForms（PR #18）
+
+WinForms 原本只用在系統匣（`NotifyIcon`＋`ContextMenuStrip`）與 `Screen.AllScreens` 兩處，兩處都改成直接呼叫 Win32。
+
+- `TrayIconService`：
+  - 用 `Shell_NotifyIcon`（NOTIFYICON_VERSION_4）加原生右鍵選單，對外介面不變。
+  - 圖示掛在隱藏的 top-level 視窗上。Explorer 重啟時會送 `TaskbarCreated` 廣播，收到後重新加回圖示；message-only 視窗收不到廣播。
+  - 選單每次打開時重建；位置用 `GetCursorPos`。Explorer 傳來的錨點是實體像素，程式目前只有 system DPI aware，兩者對不上。
+  - 選到的指令等 window procedure 返回後才執行。
+- 新增 `DisplayMonitors`：用 `EnumDisplayMonitors`／`GetMonitorInfo`／`GetDpiForMonitor`，產出和原本相同的 `PhysicalDisplayWorkArea`。
+- 使用者看得到的差異：
+  - 選單變成 Windows 原生樣式，「顯示／切換」用粗體標示，代表雙擊圖示的動作。
+  - 系統匣圖示改用 app.ico 裡對應系統 DPI 的小圖（150% 用 24px 那張），不再從 32px 縮小。
+- 使用者要求讓 Fable 做獨立 review，確認的問題都已修正：
+  - 登入時 Explorer 忙碌，`NIM_ADD` 可能回報逾時，但圖示其實已經加上。原本會停在舊版訊息模式，右鍵永遠收不到 `WM_CONTEXTMENU`。
+    改法：`NIM_ADD` 失敗時再試一次 `NIM_MODIFY` 分辨兩種情況；`NIM_SETVERSION` 沒成功時，改用 `WM_RBUTTONUP` 開選單。
+  - 螢幕列舉與主螢幕查詢都失敗時，原本會回傳空清單，讓 `DisplayTopologyConverter` 丟例外。改成比照 `Screen.AllScreens`，用螢幕尺寸與工作區指標補一台。
+  - 通知的 `NIM_MODIFY` 補上 `NIF_SHOWTIP`，避免在 version 4 下，跳過通知後滑鼠停在圖示上不再出現提示。
+  - 鍵盤在圖示上按 Enter／Space（`NIN_KEYSELECT`）也會切換模式。Enter 會送兩次，300 毫秒內的重複只算一次。
+  - 小修正：選單開著時再按右鍵不重入；`Dispose` 可以重複呼叫；類別註解改成「下載變小、記憶體不變」，符合實測。
+  - 沒修：程式以系統管理員執行時，UIPI 會擋掉 Explorer 的 `TaskbarCreated` 廣播。WinForms 版也一樣。
+- Windows 測試 12 → 16 項，涵蓋：
+  - 螢幕列表：至少一台、恰好一台主螢幕、工作區在螢幕內、DPI ≥ 96。
+  - 選單勾選：回報切換後的新狀態；程式端呼叫 `Update…` 不回送事件。
+  - 雙擊通知：會要求切換模式。
+  - Enter 重複送兩次：只切換一次。
+- 刻意改壞五種方式，每種都有一項測試失敗：
+  - 解錯 `lParam` 的 word
+  - 切換改成固定值
+  - `UpdatePositionLocked` 不存值
+  - 拿掉 Enter 去重
+  - 拿掉 `NIN_KEYSELECT` 分支
+- 開發機實機驗證，用程式送訊息模擬，不是真滑鼠：
+  - 圖示登錄成功；Windows 11 預設把新圖示收在「︿」裡。
+  - 雙擊：Dot 57×57 切到 Compact 690×168。
+  - 右鍵選單：7 項的順序和文字與原本相同。
+  - 選「鎖定」：選單出現勾選，overlay 帶上 `WS_EX_TRANSPARENT`。
+  - 選「結束」：exit code 0，圖示已移除。
+  - 預設快捷鍵被占用：通知照常出現。
+  - `TaskbarCreated`：圖示重新加回。
+  - review 修正後重新發布，再驗一次圖示登錄、從選單鎖定、從選單結束，結果相同。
+  - 還沒做：真滑鼠操作、真的重啟 Explorer。
+
+量測方法同上，和 main 的出貨 EXE 交錯執行：
+
+| | main | PR #18 |
+|---|---|---|
+| 工作管理員記憶體（3 分鐘，3 次） | 89／90／87 MB | 89／87／88 MB |
+| 暖機後最低 | 77–80 MB | 77–78 MB |
+| 總工作集 | 195–199 MB | 185–186 MB |
+| EXE | 165.3 MB | 133.6 MB |
+| 只含 EXE 的 ZIP | 66.2 MB | 56.3 MB |
+| 啟動到出現視窗（5 次） | 0.64–0.73 秒 | 0.60–0.65 秒 |
+
+工作管理員的數字沒變：WinForms 的 assembly 本來就是從 EXE 映射進來，實際碰到的頁面很少。收穫是朋友下載少約 10 MB（15%）、解壓後的 EXE 少 32 MB。記憶體量測用的 EXE，選單位置還是 wParam 錨點版；改成 `GetCursorPos` 後重新量了大小與啟動時間。
+
+量測時查了程式的 DPI 感知模式，改動前後都是 **system aware**，不是 PerMonitorV2。原因是 csproj 的 `ApplicationHighDpiMode=PerMonitorV2` 只給 WinForms 的 `ApplicationConfiguration` 產生器用，對 WPF 無效，而 `app.manifest` 沒有 `dpiAwareness`。影響是混合 DPI 時，非主螢幕上的 overlay 會被 Windows 點陣縮放而變糊，`GetDpiForMonitor` 對每台螢幕也都回報系統 DPI。修正會牽動座標換算與已存的位置，要在混合 DPI 的真機上驗證，所以沒放進這個 PR。
+
 ### 評估中：改用 Rust 重寫（待使用者決定）
 
 使用者 2026-09-29 提出，動機是省記憶體。建議先不做：
 
 - 最大的一塊（壓縮造成的約 80 MB）改一個設定就能拿到。同樣的畫面用 Rust（Win32＋Direct2D，或 egui／Slint）估計 20–50 MB（未實測），相對不壓縮的 .NET 10 再省約 40–70 MB。
-- 代價是全部重寫：產品程式約 9,500 行（`OverlayWindow` 1,600、`App` 830、Core 5,000）、244 個測試方法；WPF 內建的 DirectWrite 中文排版、PerMonitorV2 DPI、tooltip、設定視窗都要自己做；PackageBuilder 對 .NET assembly metadata 的檢查要重寫。
+- 代價是全部重寫：產品程式約 9,500 行（`OverlayWindow` 1,600、`App` 830、Core 5,000）、244 個測試方法；WPF 內建的 DirectWrite 中文排版、PerMonitorV2 DPI（[更正：實測程式目前只有 system DPI aware，見下方「拿掉 WinForms」]）、tooltip、設定視窗都要自己做；PackageBuilder 對 .NET assembly metadata 的檢查要重寫。
 - 若之後記憶體仍是首要考量，先做一個只畫 Expanded 面板的拋棄式 Rust 原型實測，再決定要不要重寫。
