@@ -459,6 +459,80 @@ public sealed class PackagePolicyTests
         }
     }
 
+    [Fact]
+    public void WindowedScanAgreesWithWholeTextScanWhereverASampleLandsAroundAWindowEdge()
+    {
+        // Windows of 64 characters with 128 of context: every sample below is shorter than the
+        // context, so the windowed scan must reach exactly the verdict a whole-text scan reaches,
+        // whether the sample sits before, across, or after the edge at 64. The word-character
+        // filler makes the \b-guarded patterns depend on the character just outside the sample.
+        const int chunkLength = 64;
+        const int overlapLength = 128;
+        var patterns = ReadSecretPatterns().Concat(ReadDeveloperPathPatterns()).ToArray();
+
+        foreach (var filler in new[] { '.', 'x' })
+        {
+            foreach (var sample in SyntheticSensitiveSamples())
+            {
+                for (var offset = chunkLength - sample.Length - 2; offset <= chunkLength + 2; offset++)
+                {
+                    var text = new StringBuilder(new string(filler, 320));
+                    text.Remove(offset, sample.Length).Insert(offset, sample);
+                    var value = text.ToString();
+
+                    foreach (var pattern in patterns)
+                    {
+                        Assert.Equal(
+                            pattern.IsMatch(value),
+                            PackageBuilder.ContainsMatch(pattern, value, chunkLength, overlapLength));
+                    }
+                }
+            }
+        }
+    }
+
+    [Fact]
+    public void WindowedScanDoesNotInventAWordBoundaryWhereAWindowStarts()
+    {
+        // The second window's context begins at index 32, exactly where a token-shaped run starts
+        // right after a word character. Cut there, the run would look like a standalone token.
+        var token = string.Concat("gh", "p_", new string('P', 36));
+        var value = new string('.', 31) + "x" + token + new string('.', 200);
+        var gitHubPattern = ReadSecretPatterns().Single(pattern => pattern.IsMatch(token));
+
+        Assert.DoesNotMatch(gitHubPattern, value);
+        Assert.Matches(gitHubPattern, value[32..]);
+        Assert.False(PackageBuilder.ContainsMatch(gitHubPattern, value, chunkLength: 64, overlapLength: 32));
+    }
+
+    [Fact]
+    public void WindowedScanFindsADeveloperPathAcrossTheDefaultWindowEdge()
+    {
+        var path = string.Concat("C:", "\\", "Users", "\\", "someone", "\\", "source");
+        var value = new StringBuilder(new string('\0', PackageBuilder.ScanChunkLength * 2 + 1000));
+        value.Remove(PackageBuilder.ScanChunkLength - 5, path.Length)
+            .Insert(PackageBuilder.ScanChunkLength - 5, path);
+
+        Assert.Contains(
+            ReadDeveloperPathPatterns(),
+            pattern => PackageBuilder.ContainsMatch(pattern, value.ToString()));
+        Assert.DoesNotContain(
+            ReadDeveloperPathPatterns(),
+            pattern => PackageBuilder.ContainsMatch(pattern, new string('\0', PackageBuilder.ScanChunkLength * 2 + 1000)));
+    }
+
+    private static string[] SyntheticSensitiveSamples() =>
+    [
+        string.Concat("RG", "API-", new string('S', 24)),
+        string.Concat("GH", "_TOKEN=\"", new string('G', 24), "\""),
+        string.Concat("gh", "p_", new string('P', 36)),
+        string.Concat("pass", "word = \"", new string('W', 12), "\""),
+        string.Join(':', string.Concat("League", "Client", "Ux"), "1234", "2999", new string('S', 24), "https"),
+        string.Concat("--remoting", "-auth-token=", new string('R', 16)),
+        string.Concat("C:", "\\", "Users", "\\", "someone", "\\"),
+        string.Concat("/ho", "me/", "someone", "/")
+    ];
+
     private static string FindRepositoryRoot()
     {
         var directory = new DirectoryInfo(AppContext.BaseDirectory);
