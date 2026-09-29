@@ -14,7 +14,10 @@
     <Platforms>x64</Platforms>
     <RuntimeIdentifier>win-x64</RuntimeIdentifier>
     <PublishSingleFile>true</PublishSingleFile>
-    <EnableCompressionInSingleFile>true</EnableCompressionInSingleFile>
+    <!-- Off on purpose: compressed assemblies are inflated into private memory at startup, which
+         measured about 80 MB more per run than mapping them straight from the EXE. The ZIP friends
+         download is the same size either way. See docs/PRODUCT_HANDOFF.md section 20. -->
+    <EnableCompressionInSingleFile>false</EnableCompressionInSingleFile>
     <SelfContained>true</SelfContained>
     <IncludeNativeLibrariesForSelfExtract>true</IncludeNativeLibrariesForSelfExtract>
     <PublishReadyToRun>false</PublishReadyToRun>

@@ -63,7 +63,7 @@ Windows PowerShell：
 ./scripts/package.ps1
 ```
 
-兩個入口都呼叫 [`eng/PackageBuilder`](eng/PackageBuilder)，依序完成 restore、可在該作業系統執行的測試、win-x64 自包含壓縮單檔 publish、離線 HTML、SHA-256、秘密／本機路徑／PDB／資料邊界／網域掃描，以及兩檔 ZIP 驗證。版本唯一來源是 [`Directory.Build.props`](Directory.Build.props)，檔名、allowlist 與掃描規則集中在 [`eng/package-config.json`](eng/package-config.json)。
+兩個入口都呼叫 [`eng/PackageBuilder`](eng/PackageBuilder)，依序完成 restore、可在該作業系統執行的測試、win-x64 自包含單檔 publish（刻意不壓縮，理由見 `docs/PRODUCT_HANDOFF.md` 第 20 節）、離線 HTML、SHA-256、秘密／本機路徑／PDB／資料邊界／網域掃描，以及兩檔 ZIP 驗證。版本唯一來源是 [`Directory.Build.props`](Directory.Build.props)，檔名、allowlist 與掃描規則集中在 [`eng/package-config.json`](eng/package-config.json)。
 
 GitHub Actions 的 [`windows-package.yml`](.github/workflows/windows-package.yml) 在 `windows-latest` 使用同一個 `scripts/package.ps1`，成功後上傳候選 ZIP、manifest 與 hashes；workflow 不會自動合併或建立正式 Release。
 
