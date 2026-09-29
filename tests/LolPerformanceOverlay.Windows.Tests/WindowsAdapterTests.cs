@@ -139,6 +139,24 @@ public sealed class WindowsAdapterTests
     }
 
     [Fact]
+    public void PressingEnterOnTheTrayIconCyclesOnceThoughTheShellReportsItTwice()
+    {
+        RunOnStaThread(() =>
+        {
+            using var tray = new TrayIconService(startupEnabled: false, positionLocked: false);
+            var cycles = 0;
+            tray.CycleRequested += () => cycles++;
+            var keySelect = (IntPtr)(TrayIconService.KeySelect | (TrayIconService.IconId << 16));
+
+            SendMessage(tray.WindowHandle, TrayIconService.CallbackMessage, IntPtr.Zero, keySelect);
+            SendMessage(tray.WindowHandle, TrayIconService.CallbackMessage, IntPtr.Zero, keySelect);
+            Dispatcher.CurrentDispatcher.Invoke(() => { }, DispatcherPriority.Background);
+
+            Assert.Equal(1, cycles);
+        });
+    }
+
+    [Fact]
     public void OverlayAdapterExposesRecoveryAndLockOperations()
     {
         var methods = typeof(OverlayWindow)
