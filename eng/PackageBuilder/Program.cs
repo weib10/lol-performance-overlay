@@ -1088,7 +1088,7 @@ internal static class PackageBuilder
             "--nologo",
             "-warnaserror",
             "-p:PublishSingleFile=true",
-            "-p:EnableCompressionInSingleFile=true",
+            "-p:EnableCompressionInSingleFile=false",
             "-p:EnableWindowsTargeting=true",
             "-p:ContinuousIntegrationBuild=true",
             "-p:Deterministic=true",
