@@ -93,7 +93,7 @@ release gate 的乾淨 Git tree 檢查會失敗，repository scan 也會去走�
 發布流程至少要自動完成：
 
 1. 還原依賴、Release 建置與全部測試。
-2. 產生 .NET 8 x64 自包含單檔 EXE。
+2. 產生 x64 自包含單檔 EXE（.NET 版本以 `global.json` 為準）。
 3. 產生完全離線、自含圖片與樣式的朋友說明 HTML。
 4. 自動把實際 EXE SHA-256 寫入說明與發布資訊。
 5. 產生只包含 `LoL即時表現Overlay.exe` 和 `先看這裡.html` 的 ZIP。

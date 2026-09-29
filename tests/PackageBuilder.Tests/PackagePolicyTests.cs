@@ -302,7 +302,7 @@ public sealed class PackagePolicyTests
 
         PackageBuilder.ValidateSyntheticRiotIds(
             noiseViolations,
-            "src/LolPerformanceOverlay.Core/bin/Release/net8.0/LolPerformanceOverlay.Core.dll",
+            "src/LolPerformanceOverlay.Core/bin/Release/net10.0/LolPerformanceOverlay.Core.dll",
             $"\"{noise}\"",
             ["Synthetic", "Fixture"],
             ["TEST", "SAFE", "SYNTHETIC"]);
@@ -315,7 +315,7 @@ public sealed class PackagePolicyTests
 
         PackageBuilder.ValidateSyntheticRiotIds(
             realViolations,
-            "src/LolPerformanceOverlay.Core/bin/Release/net8.0/LolPerformanceOverlay.Core.dll",
+            "src/LolPerformanceOverlay.Core/bin/Release/net10.0/LolPerformanceOverlay.Core.dll",
             $"\"{realIdentity}\"",
             ["Synthetic", "Fixture"],
             ["TEST", "SAFE", "SYNTHETIC"]);

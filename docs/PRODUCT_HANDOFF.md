@@ -1,11 +1,11 @@
 # LoL 即時表現 Overlay：產品與 Codex 交接文件
 
-更新日期：2026-08-20
+更新日期：2026-09-29
 
-> 這份文件是累積寫成的，第 1–14 節多數段落寫於 2026-08-10 或更早，第 15–17 節是後續
+> 這份文件是累積寫成的，第 1–14 節多數段落寫於 2026-08-10 或更早，第 15 節以後是後續
 > 里程碑。閱讀時請注意：較早的段落描述問題或計畫時，若後面的里程碑已經處理，內文會加
-> 上「[狀態：...]」標記並指向對應章節；沒有標記的段落視為仍然有效。最新狀態一律以第 17
-> 節與目前程式碼為準，不要只看章節編號較前面的敘述就當作現況。
+> 上「[狀態：...]」標記並指向對應章節；沒有標記的段落視為仍然有效。最新狀態一律以最後
+> 一節與目前程式碼為準，不要只看章節編號較前面的敘述就當作現況。
 
 ## 1. 交接目的
 
@@ -31,11 +31,11 @@
 - 主要分支：`main`（唯一分支；2026-08-16 起 `agent/linux-usability-release` 與相關 PR branch 已刪除，見第 16 節）
 - 現有公開基準：`v1.0.1-test` prerelease
 - 平台：Windows 10／11 x64
-- 技術：.NET 8、WPF、自包含單檔 EXE
+- 技術：.NET 10、WPF、自包含單檔 EXE（2026-09-29 從 .NET 8 遷移，見第 20 節）
 - 顯示模式：Dot、Compact、Expanded
 - 資料來源：League Client 本機資料、遊戲內 `127.0.0.1:2999`、Riot 靜態素材
 - 歷史資料：已有 source-neutral model、Synthetic provider 與 unavailable／policy-disabled fallback；沒有合規 live provider 時不查真人資料，OP.GG 僅提供使用者主動開啟的瀏覽器連結。2026-08-16 起 model 額外支援「只有官方牌位、沒有對局風格樣本」的狀態，見第 16 節。[狀態：`14945ec`（2026-08-17）已接上真正的 live provider——`RiotHistoricalProfileTransport` 加上 Settings 裡的 Riot Personal API key 輸入欄位，key 留白時仍是 unavailable／policy-disabled。第 17 節在此基礎上把牌位鋪到 Expanded 每一列。]
-- 自動測試：核心測試已拆成 `net8.0`，可在 Linux 或 Windows 執行；本機開發機（Windows）已確認可直接建置、跑測試、執行 WPF shell（SDK 位於 `%LOCALAPPDATA%\Microsoft\dotnet`，PATH 上的 `dotnet.exe` 可能指向沒有 SDK 的版本，需留意），不必每次都繞 CI。CI 目前只在 `windows-latest` 執行。
+- 自動測試：核心測試已拆成 `net10.0`，可在 Linux 或 Windows 執行；本機開發機（Windows）已確認可直接建置、跑測試、執行 WPF shell（SDK 版本以 `global.json` 為準；舊開發機曾把 SDK 裝在 `%LOCALAPPDATA%\Microsoft\dotnet`、不在 PATH 最前面，換機時先跑 `dotnet --list-sdks` 確認），不必每次都繞 CI。CI 目前只在 `windows-latest` 執行。
 - 候選包：repository 內的共用 PackageBuilder 由 `scripts/package.sh`（Linux／WSL 可用）與 `scripts/package.ps1`（Windows）共同呼叫，產生 EXE + 完全離線 HTML 的兩檔 ZIP、manifest 與 SHA-256。CI（`.github/workflows/windows-package.yml`）只呼叫 Windows 入口。
 - 現有 Release 不應直接重新命名為正式版；它是比較修正前後行為的基準。
 - `outputs/` 目錄下若有既有 package，可能是很舊的建置（例如仍記錄 2026-08-11 前的 commit）；展示或分享前務必重新打包，不要假設它反映目前程式碼。
@@ -356,7 +356,7 @@ P0 的架構性問題（長生命週期 UI、pointer state machine、snapshot �
 ### 已完成的 repository 內機制
 
 - `Directory.Build.props` 是 Assembly、publish、package manifest 與朋友 HTML 的唯一產品版本來源；目前候選版本為 1.1.0。
-- `global.json` 將建置 SDK 固定為 8.0.423 並停用 roll-forward；Windows workflow 使用同一版，manifest 記錄實際 SDK，避免 `8.0.x` 隨 runner 更新而讓成品漂移。
+- `global.json` 將建置 SDK 固定為 8.0.423 並停用 roll-forward；Windows workflow 使用同一版，manifest 記錄實際 SDK，避免 `8.0.x` 隨 runner 更新而讓成品漂移。[狀態：2026-09-29 起改釘 10.0.401，見第 20 節；pin 與 roll-forward 的機制不變。]
 - `eng/package-config.json` 集中兩檔 ZIP 契約、允許網域、秘密／本機路徑／fixture 身分／PDB／HTML remote resource／Overlay raw-field 掃描規則。
 - `scripts/package.sh` 與 `scripts/package.ps1` 都只啟動同一個跨平台 PackageBuilder，不各自維護一套容易漂移的 publish 或掃描流程。
 - Linux 入口會 restore、執行所有 `net8.0` 測試、cross-build `net8.0-windows` tests，再以 `EnableWindowsTargeting=true` cross-publish WPF；Windows 入口才會實際執行兩類測試，之後以相同參數 publish。
@@ -648,4 +648,28 @@ ARAM 以前完全不打 Riot API；現在每一場 ARAM 都會對每位有 Riot 
 - 尚未 push，因此沒有 CI 結果可以記錄，不能宣稱通過 release scan（敏感字串、開發者路徑、raw overlay 欄位、網域允許清單等只有 CI 會跑）。
 - 真機滑鼠：新按鈕搬進標題列後和 ⚙／— 是否好按、間距是否清楚、tooltip 是否即時出現，以及點下去之後瀏覽器分頁是否確實一次帶出整場玩家——都還沒有真機驗證。
 - Expanded 面板拿掉底部面板後的實際高度變化，沒有真機截圖比對前後差異。
-- `docs/先看這裡.html`「想自行查看公開資料」卡片仍是舊版措辭，見上方「文件同步」。
+- `docs/先看這裡.html`「想自行查看公開資料」卡片仍是舊版措辭，見上方「文件同步」。[狀態：這條寫錯了——同一個 commit `d53f304` 已經把卡片改成描述 ↗ 多人搜尋按鈕，另外保留手動開 OP.GG 首頁的選項。2026-09-29 查證。]
+
+## 20. 2026-09-29：遷移到 .NET 10
+
+.NET 8 LTS 在 2026-11-10 停止支援，之後自包含 EXE 內附的 runtime 不再收到安全更新。.NET 10 是 LTS（支援到 2028-11），因此整個 repository 從 `net8.0`／`net8.0-windows` 改到 `net10.0`／`net10.0-windows`，SDK pin 改為 10.0.401。`global.json` 與 Windows workflow 同版，PackageBuilder 本來就會擋兩者不一致。
+
+### 改動範圍
+
+- 六個專案的 `TargetFramework`。
+- `eng/PackageBuilder/Program.cs`：原本四處寫死 `net8.0` 的 Release 輸出路徑與跨平台測試判斷，收成一個 `ProductFramework` 常數。下次升版改這個常數加各 csproj 即可。
+- `global.json`、`.github/workflows/windows-package.yml`、`scripts/package.ps1`／`package.sh` 的錯誤訊息。
+- `AGENTS.md`、`README.md` 不再寫死 SDK 版本，改指向 `global.json`，避免下次升版又留下過期數字。
+- 測試套件版本（`Microsoft.NET.Test.Sdk` 17.12.0、`xunit` 2.9.3、`xunit.runner.visualstudio` 3.0.1）沒動：在 `net10.0` 下正常執行，升級是另一件事。
+
+### 相容性
+
+- 官方 .NET 10 breaking changes 清單裡跟這個專案有關的只有兩條，都沒踩到：WPF 與 WinForms 並用時 `ContextMenu`／`MenuItem` 要消歧（`TrayIconService` 本來就用 `Forms.` alias）；單檔 app 不再到 EXE 目錄找 native library（`IncludeNativeLibrariesForSelfExtract=true`，native 都包在 EXE 內）。
+- Windows 支援：.NET 10 官方支援清單只列 Windows 11 與 Windows 10 企業／IoT 長期服務版。一般家用 Windows 10 22H2 技術上可以執行，但不在微軟支援範圍，也還沒實機驗證。README 已註明；朋友 HTML 仍寫「Windows 10／11 x64」，要不要改是產品決定，尚未處理。
+
+### 驗證
+
+- Windows 開發機（Windows 11、Ryzen 7 7700、主螢幕 4K 150%＋副螢幕 1080p 100%）：四個專案 `--no-incremental -warnaserror` Release 建置 0 warning／0 error；核心 302／302、Windows 12／12、PackageBuilder 29／29。
+- `--demo`／`--demo-expanded` 實際啟動：Dot 與 Expanded 的截圖和 .NET 8 版一致，視窗 extended style 仍是 `TOPMOST | TOOLWINDOW | LAYERED | NOACTIVATE`。
+- 本機沒跑完整 PackageBuilder：工作目錄有未追蹤檔，clean-tree gate 會擋。release scan 以 CI 結果為準。
+- 跟 .NET 8 時一樣仍未驗證：真機滑鼠拖曳、click-through、多螢幕拖曳、真實對局。

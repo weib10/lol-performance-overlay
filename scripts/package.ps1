@@ -8,7 +8,7 @@ $dotnetHost = $env:PACKAGE_DOTNET_HOST
 if ([string]::IsNullOrWhiteSpace($dotnetHost)) {
     $dotnetCommand = Get-Command dotnet -ErrorAction SilentlyContinue
     if ($null -eq $dotnetCommand) {
-        throw '.NET 8 SDK was not found. Install it from an official Microsoft source and try again.'
+        throw '.NET 10 SDK was not found. Install it from an official Microsoft source and try again.'
     }
 
     $dotnetHost = $dotnetCommand.Source
