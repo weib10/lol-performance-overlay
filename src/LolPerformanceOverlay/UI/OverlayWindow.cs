@@ -14,7 +14,6 @@ using LolPerformanceOverlay.Core;
 using LolPerformanceOverlay.Core.Interaction;
 using LolPerformanceOverlay.Core.Presentation;
 using LolPerformanceOverlay.Services;
-using Forms = System.Windows.Forms;
 
 namespace LolPerformanceOverlay.UI;
 
@@ -31,8 +30,6 @@ public sealed class OverlayWindow : Window
     private const int WmNcHitTest = 0x0084;
     private const int MaNoActivate = 3;
     private const int HtTransparent = -1;
-    private const uint MonitorDefaultToNearest = 2;
-    private const int MonitorDpiTypeEffective = 0;
     private const uint SwpNoSize = 0x0001;
     private const uint SwpNoMove = 0x0002;
     private const uint SwpNoZOrder = 0x0004;
@@ -1552,41 +1549,7 @@ public sealed class OverlayWindow : Window
         var fallbackDpi = VisualTreeHelper.GetDpi(this);
         var fallbackDpiX = (uint)Math.Max(96, Math.Round(fallbackDpi.PixelsPerInchX));
         var fallbackDpiY = (uint)Math.Max(96, Math.Round(fallbackDpi.PixelsPerInchY));
-        var physicalDisplays = Forms.Screen.AllScreens.Select(screen =>
-        {
-            var area = screen.WorkingArea;
-            var bounds = screen.Bounds;
-            var monitor = MonitorFromPoint(
-                new NativePoint(
-                    bounds.Left + bounds.Width / 2,
-                    bounds.Top + bounds.Height / 2),
-                MonitorDefaultToNearest);
-            var dpiX = fallbackDpiX;
-            var dpiY = fallbackDpiY;
-            if (monitor != IntPtr.Zero &&
-                GetDpiForMonitor(monitor, MonitorDpiTypeEffective, out var monitorDpiX, out var monitorDpiY) == 0)
-            {
-                dpiX = monitorDpiX;
-                dpiY = monitorDpiY;
-            }
-
-            return new PhysicalDisplayWorkArea(
-                screen.DeviceName,
-                new PixelRect(
-                    bounds.Left,
-                    bounds.Top,
-                    bounds.Width,
-                    bounds.Height),
-                new PixelRect(
-                    area.Left,
-                    area.Top,
-                    area.Width,
-                    area.Height),
-                dpiX,
-                dpiY,
-                screen.Primary);
-        }).ToArray();
-        return DisplayTopologyConverter.ToDips(physicalDisplays);
+        return DisplayTopologyConverter.ToDips(DisplayMonitors.Enumerate(fallbackDpiX, fallbackDpiY));
     }
 
     private IntPtr WndProc(IntPtr hwnd, int message, IntPtr wParam, IntPtr lParam, ref bool handled)
@@ -1794,26 +1757,4 @@ public sealed class OverlayWindow : Window
         int height,
         uint flags);
 
-    [DllImport("user32.dll")]
-    private static extern IntPtr MonitorFromPoint(NativePoint point, uint flags);
-
-    [DllImport("shcore.dll")]
-    private static extern int GetDpiForMonitor(
-        IntPtr monitor,
-        int dpiType,
-        out uint dpiX,
-        out uint dpiY);
-
-    [StructLayout(LayoutKind.Sequential)]
-    private struct NativePoint
-    {
-        public NativePoint(int x, int y)
-        {
-            X = x;
-            Y = y;
-        }
-
-        public int X;
-        public int Y;
-    }
 }
