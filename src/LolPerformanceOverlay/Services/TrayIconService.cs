@@ -5,18 +5,21 @@ namespace LolPerformanceOverlay.Services;
 
 /// <summary>
 /// Notification-area icon and its right-click menu, built on Shell_NotifyIcon and a native popup
-/// menu. WinForms' NotifyIcon did the same job, but loading WinForms only for it cost measurable
-/// memory on every run; see docs/PRODUCT_HANDOFF.md section 20.
+/// menu instead of WinForms' NotifyIcon, so the single-file bundle no longer carries WinForms
+/// (about 10 MB less to download; memory is unchanged). See docs/PRODUCT_HANDOFF.md section 20.
 /// </summary>
 public sealed class TrayIconService : IDisposable
 {
     internal const int CallbackMessage = WmApp + 1;
     internal const uint IconId = 1;
+    internal const int KeySelect = 0x0401;
     private const string TipText = "LoL 即時表現 Overlay";
+    private const long KeySelectRepeatMilliseconds = 300;
 
     private const int WmNull = 0x0000;
     private const int WmContextMenu = 0x007B;
     private const int WmLButtonDoubleClick = 0x0203;
+    private const int WmRButtonUp = 0x0205;
     private const int WmApp = 0x8000;
     private const uint NimAdd = 0;
     private const uint NimModify = 1;
@@ -44,6 +47,10 @@ public sealed class TrayIconService : IDisposable
     private readonly IntPtr _icon;
     private readonly bool _ownsIcon;
     private bool _added;
+    private bool _version4;
+    private bool _menuOpen;
+    private bool _disposed;
+    private long _lastKeySelect = long.MinValue / 2;
     private bool _startupEnabled;
     private bool _positionLocked;
 
@@ -86,7 +93,9 @@ public sealed class TrayIconService : IDisposable
             return;
         }
 
-        var data = NewData(NifInfo);
+        // Every modify restates NIF_SHOWTIP: under version 4 a modify without it can drop the
+        // standard hover tooltip.
+        var data = NewData(NifInfo | NifShowTip);
         data.InfoTitle = title;
         data.Info = message;
         Shell_NotifyIcon(NimModify, ref data);
@@ -94,6 +103,12 @@ public sealed class TrayIconService : IDisposable
 
     public void Dispose()
     {
+        if (_disposed)
+        {
+            return;
+        }
+
+        _disposed = true;
         RemoveIcon();
         _window.RemoveHook(WndProc);
         _window.Dispose();
@@ -134,13 +149,28 @@ public sealed class TrayIconService : IDisposable
     {
         if (message == CallbackMessage)
         {
-            // NOTIFYICON_VERSION_4 puts the event in the low word of lParam.
+            // NOTIFYICON_VERSION_4 puts the event in the low word of lParam; the legacy version
+            // sends the bare mouse message, which is the same value.
             switch (unchecked((ushort)lParam.ToInt64()))
             {
                 case WmLButtonDoubleClick:
                     Post(TrayCommand.Cycle);
                     break;
+                case KeySelect:
+                    // Enter or Space on the focused icon; Enter reports it twice.
+                    var now = Environment.TickCount64;
+                    if (now - _lastKeySelect > KeySelectRepeatMilliseconds)
+                    {
+                        Post(TrayCommand.Cycle);
+                    }
+
+                    _lastKeySelect = now;
+                    break;
                 case WmContextMenu:
+                    ShowMenu();
+                    break;
+                case WmRButtonUp when !_version4:
+                    // Without version 4 the shell never sends WM_CONTEXTMENU.
                     ShowMenu();
                     break;
             }
@@ -159,6 +189,13 @@ public sealed class TrayIconService : IDisposable
 
     private void ShowMenu()
     {
+        // The menu's modal loop keeps dispatching tray callbacks, so a second right-click while it
+        // is open lands here again.
+        if (_menuOpen)
+        {
+            return;
+        }
+
         // The cursor, not the anchor in wParam: Explorer sends that in physical pixels, which
         // only match this process's coordinates when the tray's monitor is at the system DPI.
         if (!GetCursorPos(out var cursor))
@@ -173,6 +210,7 @@ public sealed class TrayIconService : IDisposable
         }
 
         int command;
+        _menuOpen = true;
         try
         {
             Append(menu, TrayCommand.Cycle, "顯示／切換");
@@ -200,6 +238,7 @@ public sealed class TrayIconService : IDisposable
         }
         finally
         {
+            _menuOpen = false;
             DestroyMenu(menu);
         }
 
@@ -222,12 +261,12 @@ public sealed class TrayIconService : IDisposable
         data.CallbackMessage = CallbackMessage;
         data.Icon = _icon;
         data.Tip = TipText;
-        _added = Shell_NotifyIcon(NimAdd, ref data);
-        if (_added)
-        {
-            data.TimeoutOrVersion = NotifyIconVersion4;
-            Shell_NotifyIcon(NimSetVersion, ref data);
-        }
+        // A busy Explorer at sign-in can time NIM_ADD out after it has already added the icon; a
+        // modify that succeeds tells that apart from a real failure. A real failure is retried
+        // when Explorer broadcasts TaskbarCreated.
+        _added = Shell_NotifyIcon(NimAdd, ref data) || Shell_NotifyIcon(NimModify, ref data);
+        data.TimeoutOrVersion = NotifyIconVersion4;
+        _version4 = _added && Shell_NotifyIcon(NimSetVersion, ref data);
     }
 
     private void RemoveIcon()
@@ -235,6 +274,7 @@ public sealed class TrayIconService : IDisposable
         var data = NewData(0);
         Shell_NotifyIcon(NimDelete, ref data);
         _added = false;
+        _version4 = false;
     }
 
     private NotifyIconData NewData(uint flags) => new()
