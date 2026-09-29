@@ -673,3 +673,29 @@ ARAM 以前完全不打 Riot API；現在每一場 ARAM 都會對每位有 Riot 
 - `--demo`／`--demo-expanded` 實際啟動：Dot 與 Expanded 的截圖和 .NET 8 版一致，視窗 extended style 仍是 `TOPMOST | TOOLWINDOW | LAYERED | NOACTIVATE`。
 - 本機沒跑完整 PackageBuilder：工作目錄有未追蹤檔，clean-tree gate 會擋。release scan 以 CI 結果為準。
 - 跟 .NET 8 時一樣仍未驗證：真機滑鼠拖曳、click-through、多螢幕拖曳、真實對局。
+- CI：PR #15，commit `219a868`，run `36562995546`（`windows-latest`，SDK 10.0.401），`Build, test, scan, and package` 成功，release scan 在內。
+
+### 第一份 Windows WPF 記憶體／CPU 實測
+
+之前第 15、17 節的數字都是邏輯層 proxy。這次在上述開發機實際跑 `--demo-expanded`（Replay 資料每秒更新），暖機 20 秒後每 10 秒取樣、共 3 分鐘，記錄工作管理員預設顯示的「私人工作集」。每種設定跑 3 次。暖機後最低點是穩定基線；結束值受 GC 時機影響，雜訊大。
+
+| 設定 | EXE 大小 | 暖機後最低 | 3 分鐘結束值（3 次） |
+|---|---:|---:|---|
+| .NET 8、壓縮單檔（遷移前出貨設定） | 68.5 MB | 155–157 MB | 161／184／167 MB |
+| .NET 10、壓縮單檔（目前出貨設定） | 72.1 MB | 159–160 MB | 199／167／209 MB |
+| .NET 10、不壓縮單檔 | 165.3 MB | 74–77 MB | 89／108／84 MB |
+
+- .NET 10 本身沒有改變基線（差 3–4 MB）。結束值 3 次中有 2 次較高，不能排除 .NET 10 的 GC 讓峰值多 20–40 MB，但幅度在雜訊範圍內。
+- 單檔壓縮每次都多約 80 MB：壓縮的 assembly 啟動時要解壓進私有記憶體，不壓縮時直接從 EXE 映射。兩者打成 ZIP 都約 66 MB，朋友下載量不變，只有解壓後的 EXE 從 72 MB 變 165 MB。
+- 另測一次關掉 concurrent GC（不壓縮，結束值 125 MB），看不出幫助，不採用。
+- CPU 三種設定都約占全機 0.1%（16 執行緒），低於第 7 節 Expanded 2% 的門檻。3 分鐘不足以判斷第 7 節的 30 分鐘記憶體成長門檻。
+
+**還沒改成不壓縮**，因為會卡在 release gate：PackageBuilder 掃描已發布 EXE 時，每條正規表示式有 2 秒逾時。在 scratchpad 模擬同一段掃描，不壓縮 EXE 最慢的一條在這台要 1.25–1.38 秒。CI 掃壓縮 EXE 花 14.3 秒、本機 8.1 秒，CI 約慢 1.75 倍，換算會超過 2 秒而失敗。要切換得先讓 EXE 掃描分段進行（規則不放寬），再改 `EnableCompressionInSingleFile`（csproj 與 PackageBuilder 的 publish 參數各一處）並補測試。
+
+### 評估中：改用 Rust 重寫（待使用者決定）
+
+使用者 2026-09-29 提出，動機是省記憶體。建議先不做：
+
+- 最大的一塊（壓縮造成的約 80 MB）改一個設定就能拿到。同樣的畫面用 Rust（Win32＋Direct2D，或 egui／Slint）估計 20–50 MB（未實測），相對不壓縮的 .NET 10 再省約 40–70 MB。
+- 代價是全部重寫：產品程式約 9,500 行（`OverlayWindow` 1,600、`App` 830、Core 5,000）、244 個測試方法；WPF 內建的 DirectWrite 中文排版、PerMonitorV2 DPI、tooltip、設定視窗都要自己做；PackageBuilder 對 .NET assembly metadata 的檢查要重寫。
+- 若之後記憶體仍是首要考量，先做一個只畫 Expanded 面板的拋棄式 Rust 原型實測，再決定要不要重寫。
