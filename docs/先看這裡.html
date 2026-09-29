@@ -222,7 +222,7 @@
         </article>
         <article class="card step">
           <h3>雙擊 EXE</h3>
-          <p>程式啟動後會待在工作列右下角的系統匣；沒有傳統主視窗是正常的。若圖示被收起，先點工作列的「︿」。</p>
+          <p>程式啟動後會待在工作列右下角的系統匣，圖示是一顆橘色圓點；沒有傳統主視窗是正常的。若圖示被收起，先點工作列的「︿」。在圖示上按右鍵可以打開選單。</p>
         </article>
         <article class="card step">
           <h3>照常開啟 LoL</h3>
@@ -252,9 +252,9 @@
       <div class="card" style="margin-top: 14px;">
         <h3>常用控制</h3>
         <ul>
-          <li><b>切換大小：</b>點擊圓點、使用面板按鈕，或按 <code>Ctrl + Shift + O</code>。若組合鍵已被其他程式占用，系統匣設定會顯示實際可用的快捷鍵。</li>
-          <li><b>鎖定位置：</b>從系統匣或設定開啟「鎖定位置」。鎖定後 Overlay 內的按鈕也不接收滑鼠；請用快捷鍵或系統匣切換顯示，要搬動時先從系統匣解除鎖定。</li>
-          <li><b>視窗不見：</b>在系統匣選「顯示」；若換過螢幕或縮放比例，選「重設位置」把 Overlay 帶回目前可見範圍。</li>
+          <li><b>切換大小：</b>點擊圓點、使用面板按鈕，或按 <code>Ctrl + Shift + O</code>。若組合鍵已被其他程式占用，程式會跳出 Windows 通知說明改用了哪一組（或兩組都無法使用），設定裡也看得到目前的快捷鍵。</li>
+          <li><b>鎖定位置：</b>在系統匣選單或設定勾選「鎖定 Overlay 位置」。鎖定後 Overlay 內的按鈕也不接收滑鼠；請用快捷鍵或系統匣切換顯示，要搬動時先從系統匣取消勾選。</li>
+          <li><b>視窗不見：</b>在系統匣選「顯示／切換」；若換過螢幕或縮放比例，選「重設 Overlay 位置」把 Overlay 帶回目前可見範圍。</li>
           <li><b>結束程式：</b>在系統匣選「結束」。只關閉 LoL 不一定會關閉 Overlay。</li>
         </ul>
       </div>
@@ -319,7 +319,7 @@
       </details>
       <details open>
         <summary>雙擊後沒有主視窗</summary>
-        <p>先看工作列右下角系統匣；沒有對局時 Overlay 本來就可能隱藏。點「︿」查看收起的圖示，再從圖示選「顯示」。</p>
+        <p>先看工作列右下角系統匣；沒有對局時 Overlay 本來就可能隱藏。點「︿」查看收起的圖示，在橘色圓點上按右鍵選「顯示／切換」。</p>
       </details>
       <details>
         <summary>進入遊戲後仍在等待</summary>
@@ -331,11 +331,11 @@
       </details>
       <details>
         <summary>Overlay 擋住遊戲點擊</summary>
-        <p>在系統匣開啟「鎖定位置」；整個 Overlay 就不應接收滑鼠，控制按鈕也需先從系統匣解除鎖定才可使用。若鎖定後仍擋住，先隱藏 Overlay 並回報發生的模式與位置。</p>
+        <p>在系統匣勾選「鎖定 Overlay 位置」；整個 Overlay 就不應接收滑鼠，控制按鈕也需先從系統匣取消勾選才可使用。若鎖定後仍擋住，先隱藏 Overlay 並回報發生的模式與位置。</p>
       </details>
       <details>
         <summary>換螢幕後 Overlay 不見</summary>
-        <p>從系統匣選「重設位置」。程式會依目前可見的螢幕工作區校正位置；重新啟動後也應停在合理範圍。</p>
+        <p>從系統匣選「重設 Overlay 位置」。程式會依目前可見的螢幕工作區校正位置；重新啟動後也應停在合理範圍。</p>
       </details>
       <details>
         <summary>LoL 更新後突然失效</summary>
@@ -347,7 +347,7 @@
       <h2>完整移除</h2>
       <div class="card">
         <ol>
-          <li>從系統匣設定關閉「登入 Windows 後自動啟動」。</li>
+          <li>在系統匣選單或設定取消勾選「登入 Windows 後自動啟動」。</li>
           <li>從系統匣選「結束」。</li>
           <li>刪除解壓後的 EXE、HTML 與原始 ZIP。</li>
           <li>若也要清掉設定與公開素材快取，按 <code>Win + R</code>，貼上 <code>%LOCALAPPDATA%\LolPerformanceOverlay</code>，確認資料夾名稱正確後刪除。</li>

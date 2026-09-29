@@ -2,6 +2,7 @@ using System.Reflection;
 using System.IO;
 using System.Runtime.ExceptionServices;
 using System.Runtime.InteropServices;
+using System.Text.RegularExpressions;
 using System.Windows.Controls;
 using System.Windows.Documents;
 using System.Windows.Threading;
@@ -154,6 +155,32 @@ public sealed class WindowsAdapterTests
 
             Assert.Equal(1, cycles);
         });
+    }
+
+    [Fact]
+    public void FriendGuideQuotesOnlyTrayMenuItemsThatExist()
+    {
+        // Friends follow 先看這裡.html word for word, so every name it quotes next to the tray must
+        // be a real menu item. The taskbar's overflow chevron is the one quoted non-item.
+        const string overflowChevron = "︿";
+        var guide = File.ReadAllLines(Path.Combine(FindRepositoryRoot(), "docs", "先看這裡.html"));
+        var quoted = guide
+            .Where(line => line.Contains("系統匣", StringComparison.Ordinal))
+            .SelectMany(line => Regex.Matches(line, "「([^」]+)」").Select(match => match.Groups[1].Value))
+            .Where(name => name != overflowChevron)
+            .ToHashSet(StringComparer.Ordinal);
+
+        Assert.Subset(ActionLabels.TrayMenu.ToHashSet(StringComparer.Ordinal), quoted);
+        Assert.Superset(
+            new HashSet<string>(StringComparer.Ordinal)
+            {
+                ActionLabels.ShowOrCycle,
+                ActionLabels.ResetPosition,
+                ActionLabels.LockPosition,
+                ActionLabels.StartWithWindows,
+                ActionLabels.Exit
+            },
+            quoted);
     }
 
     [Fact]
@@ -375,6 +402,22 @@ public sealed class WindowsAdapterTests
 
         // A parsed key must also survive the gate EnsureChampionIconAsync re-applies before download.
         Assert.True(StaticAssetPolicy.IsChampionKey(byId[2081].Key));
+    }
+
+    private static string FindRepositoryRoot()
+    {
+        var directory = new DirectoryInfo(AppContext.BaseDirectory);
+        while (directory is not null)
+        {
+            if (File.Exists(Path.Combine(directory.FullName, "global.json")))
+            {
+                return directory.FullName;
+            }
+
+            directory = directory.Parent;
+        }
+
+        throw new DirectoryNotFoundException("Could not find global.json from the test output directory.");
     }
 
     // Win32 windows and WPF dispatchers both need an STA thread of their own.
