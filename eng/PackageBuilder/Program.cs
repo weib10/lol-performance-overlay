@@ -11,6 +11,11 @@ return PackageBuilder.Run(args);
 
 internal static class PackageBuilder
 {
+    // The product's target framework. It names the Release output folders this builder reads
+    // back, so it must move together with the TargetFramework in the product and test projects.
+    private const string ProductFramework = "net10.0";
+    private const string WindowsProductFramework = ProductFramework + "-windows";
+
     private static readonly JsonSerializerOptions JsonOptions = new()
     {
         PropertyNameCaseInsensitive = true,
@@ -901,14 +906,14 @@ internal static class PackageBuilder
         var allProjects = FindTestProjects(context).ToArray();
         var selected = OperatingSystem.IsWindows()
             ? allProjects
-            : allProjects.Where(IsCrossPlatformNet8TestProject).ToArray();
+            : allProjects.Where(IsCrossPlatformTestProject).ToArray();
 
         if (selected.Length == 0)
         {
             throw new InvalidOperationException(
                 OperatingSystem.IsWindows()
                     ? "No test projects were found."
-                    : "No Linux-executable net8.0 test project was found; the package cannot skip all cross-platform tests.");
+                    : $"No Linux-executable {ProductFramework} test project was found; the package cannot skip all cross-platform tests.");
         }
 
         var testResultsDirectory = Path.Combine(
@@ -1068,13 +1073,13 @@ internal static class PackageBuilder
         {
             ResolveInsideRoot(
                 context.Root,
-                "src/LolPerformanceOverlay.Core/bin/Release/net8.0/LolPerformanceOverlay.Core.dll"),
+                $"src/LolPerformanceOverlay.Core/bin/Release/{ProductFramework}/LolPerformanceOverlay.Core.dll"),
             ResolveInsideRoot(
                 context.Root,
-                "src/LolPerformanceOverlay/bin/Release/net8.0-windows/win-x64/LolPerformanceOverlay.dll"),
+                $"src/LolPerformanceOverlay/bin/Release/{WindowsProductFramework}/win-x64/LolPerformanceOverlay.dll"),
             ResolveInsideRoot(
                 context.Root,
-                "src/LolPerformanceOverlay/bin/Release/net8.0-windows/win-x64/LolPerformanceOverlay.Core.dll")
+                $"src/LolPerformanceOverlay/bin/Release/{WindowsProductFramework}/win-x64/LolPerformanceOverlay.Core.dll")
         };
         if (assemblies.Any(path => !File.Exists(path)))
         {
@@ -1363,7 +1368,7 @@ internal static class PackageBuilder
     {
         var assembly = ResolveInsideRoot(
             context.Root,
-            "src/LolPerformanceOverlay/bin/Release/net8.0-windows/win-x64/LolPerformanceOverlay.dll");
+            $"src/LolPerformanceOverlay/bin/Release/{WindowsProductFramework}/win-x64/LolPerformanceOverlay.dll");
         return File.Exists(assembly)
             ? assembly
             : throw new InvalidDataException(
@@ -1669,14 +1674,14 @@ internal static class PackageBuilder
             .Any(element => string.Equals(element.Value.Trim(), "true", StringComparison.OrdinalIgnoreCase));
     }
 
-    private static bool IsCrossPlatformNet8TestProject(string path)
+    private static bool IsCrossPlatformTestProject(string path)
     {
         var document = XDocument.Load(path);
         var frameworks = document.Descendants()
             .Where(element => element.Name.LocalName is "TargetFramework" or "TargetFrameworks")
             .SelectMany(element => element.Value.Split(';', StringSplitOptions.TrimEntries | StringSplitOptions.RemoveEmptyEntries))
             .ToArray();
-        return frameworks.Contains("net8.0", StringComparer.OrdinalIgnoreCase) &&
+        return frameworks.Contains(ProductFramework, StringComparer.OrdinalIgnoreCase) &&
                !frameworks.Any(framework => framework.Contains("-windows", StringComparison.OrdinalIgnoreCase));
     }
 

@@ -10,7 +10,7 @@ if [[ -z "$dotnet_host" ]]; then
 fi
 
 if [[ -z "$dotnet_host" || ! -x "$dotnet_host" ]]; then
-  echo "錯誤：找不到 .NET 8 SDK。請從 Microsoft 官方來源安裝後重試。" >&2
+  echo "錯誤：找不到 .NET 10 SDK。請從 Microsoft 官方來源安裝後重試。" >&2
   exit 1
 fi
 

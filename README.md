@@ -8,6 +8,8 @@ Windows 10／11 x64 的低干擾桌面 Overlay。程式唯讀取得同一台電�
 
 Repository 目前產生的是**未簽章候選成品**，不是穩定 Release。Linux 能驗證跨平台邏輯、Windows cross-publish、掃描與 ZIP 契約；SmartScreen、WPF 焦點、真實拖曳手感、DPI／多螢幕、系統匣與完整 LoL 對局仍須在 Windows 10／11 真機驗收。
 
+EXE 自帶 .NET 10 執行環境，朋友不必另外安裝。微軟對 .NET 10 的官方支援清單只列 Windows 11 與 Windows 10 企業／IoT 長期服務版；一般家用 Windows 10 22H2 技術上可以執行，但不在微軟支援範圍內，也還沒有在 Windows 10 實機驗收過。
+
 目前候選版本：`1.1.0`。這個數字由 [`Directory.Build.props`](Directory.Build.props) 控制；PackageBuilder 會拒絕 README、朋友 HTML、Windows manifest 或 EXE metadata 不一致的產物。
 
 執行 `scripts/package.sh`（Linux）或 `scripts/package.ps1`（Windows）後，候選 ZIP 位於：
@@ -47,7 +49,7 @@ ZIP 解壓後只包含：
 
 ## 一鍵建置、測試與打包
 
-需求：`global.json` 鎖定的官方 .NET SDK 8.0.423。Linux 可 cross-publish Windows x64 並 cross-build Windows-only tests；Windows CI 會實際執行這些 Windows-only tests。
+需求：`global.json` 鎖定版本的官方 .NET SDK。Linux 可 cross-publish Windows x64 並 cross-build Windows-only tests；Windows CI 會實際執行這些 Windows-only tests。
 
 Linux：
 
