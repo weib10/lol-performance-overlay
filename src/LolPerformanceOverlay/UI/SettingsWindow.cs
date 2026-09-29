@@ -36,7 +36,10 @@ public sealed class SettingsWindow : Window
         _opacityPreview = new OpacityPreviewSession(settings.Opacity);
         Title = "LoL 即時表現 Overlay 設定";
         Width = 420;
-        Height = 540;
+        // Grow with the content instead of a fixed height: each new section used to push the
+        // Save row out of a hard-coded height. On a short screen the content scrolls instead.
+        SizeToContent = SizeToContent.Height;
+        MaxHeight = SystemParameters.WorkArea.Height;
         // The Overlay is Topmost, so an unowned dialog opens underneath it and its
         // controls cannot be reached. Owning the dialog puts it above its owner, and
         // Topmost keeps it above the game as well.
@@ -179,7 +182,12 @@ public sealed class SettingsWindow : Window
         buttons.Children.Add(save);
         root.Children.Add(buttons);
 
-        Content = root;
+        Content = new ScrollViewer
+        {
+            Content = root,
+            VerticalScrollBarVisibility = ScrollBarVisibility.Auto,
+            HorizontalScrollBarVisibility = ScrollBarVisibility.Disabled
+        };
 
         // Covers every way the dialog can close without saving -- the Cancel button (which
         // only sets DialogResult = false, itself closing the window), the title bar's own
@@ -231,6 +239,7 @@ public sealed class SettingsWindow : Window
         {
             Text = text,
             FontSize = 12,
+            TextWrapping = TextWrapping.Wrap,
             Foreground = new SolidColorBrush(Color.FromRgb(164, 176, 194)),
             Margin = new Thickness(0, 3, 0, 0)
         };
