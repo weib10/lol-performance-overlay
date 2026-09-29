@@ -1,6 +1,6 @@
 # LoL 即時表現 Overlay
 
-Windows 10／11 x64 的低干擾桌面 Overlay。程式唯讀取得同一台電腦上由 League Client／遊戲提供的資料，將「這一場目前的相對表現」整理成圓點、精簡資訊條或十人面板。
+Windows 11 x64 的低干擾桌面 Overlay（Windows 10 的狀況見下方「目前交付狀態」）。程式唯讀取得同一台電腦上由 League Client／遊戲提供的資料，將「這一場目前的相對表現」整理成圓點、精簡資訊條或十人面板。
 
 這不是 Riot Games 官方程式，也不代表 Riot Games 的認可。
 

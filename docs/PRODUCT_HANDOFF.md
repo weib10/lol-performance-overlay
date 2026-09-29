@@ -30,7 +30,7 @@
 - Repository：`https://github.com/weib10/lol-performance-overlay`
 - 主要分支：`main`（唯一分支；2026-08-16 起 `agent/linux-usability-release` 與相關 PR branch 已刪除，見第 16 節）
 - 現有公開基準：`v1.0.1-test` prerelease
-- 平台：Windows 10／11 x64
+- 平台：Windows 11 x64（2026-09-29 起；Windows 10 未驗證、不保證，理由見第 20 節「相容性」）
 - 技術：.NET 10、WPF、自包含單檔 EXE（2026-09-29 從 .NET 8 遷移，見第 20 節）
 - 顯示模式：Dot、Compact、Expanded
 - 資料來源：League Client 本機資料、遊戲內 `127.0.0.1:2999`、Riot 靜態素材
@@ -665,7 +665,7 @@ ARAM 以前完全不打 Riot API；現在每一場 ARAM 都會對每位有 Riot 
 ### 相容性
 
 - 官方 .NET 10 breaking changes 清單裡跟這個專案有關的只有兩條，都沒踩到：WPF 與 WinForms 並用時 `ContextMenu`／`MenuItem` 要消歧（`TrayIconService` 本來就用 `Forms.` alias）；單檔 app 不再到 EXE 目錄找 native library（`IncludeNativeLibrariesForSelfExtract=true`，native 都包在 EXE 內）。
-- Windows 支援：.NET 10 官方支援清單只列 Windows 11 與 Windows 10 企業／IoT 長期服務版。一般家用 Windows 10 22H2 技術上可以執行，但不在微軟支援範圍，也還沒實機驗證。README 已註明；朋友 HTML 仍寫「Windows 10／11 x64」，要不要改是產品決定，尚未處理。
+- Windows 支援：.NET 10 官方支援清單只列 Windows 11 與 Windows 10 企業／IoT 長期服務版。一般家用 Windows 10 22H2 技術上可以執行，但不在微軟支援範圍，也還沒實機驗證。README 已註明；朋友 HTML 仍寫「Windows 10／11 x64」，要不要改是產品決定，尚未處理。[狀態：使用者同意改寫。朋友 HTML 頁首改為「Windows 11 x64」，疑難排解新增「我的電腦是 Windows 10」一條，白話說明未驗證、不保證；README 開頭與第 3 節平台同步。]
 
 ### 驗證
 
