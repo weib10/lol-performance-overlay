@@ -1,5 +1,6 @@
 using System.Windows;
 using System.Windows.Interop;
+using System.Windows.Media;
 using System.Diagnostics;
 using LolPerformanceOverlay.Core;
 using LolPerformanceOverlay.Core.Presentation;
@@ -50,6 +51,17 @@ public partial class App : System.Windows.Application
     private LeaguePhase _lastPhase = LeaguePhase.None;
     private bool _demoExpanded;
     private bool _isDemo;
+
+    // Software rendering for the whole process, set before any window exists. The overlay is a
+    // small layered window that repaints about once a second, so a Direct3D device buys
+    // nothing here and costs memory: about 30 MB at rest, plus up to about 85 MB more that
+    // WPF's hardware path keeps after the window has crossed between monitors often enough.
+    // It also keeps the overlay off the GPU the game is using. Measurements are in
+    // docs/PRODUCT_HANDOFF.md section 21.
+    static App()
+    {
+        RenderOptions.ProcessRenderMode = RenderMode.SoftwareOnly;
+    }
 
     protected override async void OnStartup(StartupEventArgs e)
     {
