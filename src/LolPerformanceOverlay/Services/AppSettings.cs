@@ -9,8 +9,20 @@ namespace LolPerformanceOverlay.Services;
 
 public sealed class AppSettings
 {
-    public double Left { get; set; } = double.NaN;
-    public double Top { get; set; } = double.NaN;
+    // The overlay's top-left in physical pixels (see OverlayPlacement for why not WPF DIPs).
+    // Read and written as double, not int: an int field makes System.Text.Json throw on a value
+    // like 1e10 or 12.5, and SettingsStore.Load then falls back to defaults for the whole file,
+    // taking the hotkey and the Riot API key with it. Load rounds and range-checks them instead.
+    public double? PositionX { get; set; }
+    public double? PositionY { get; set; }
+
+    // Where versions before PerMonitorV2 kept the position, in system-DPI WPF DIPs. Read once to
+    // migrate (OverlayPlacement.FromLegacyDips), then cleared, and never written again.
+    [JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)]
+    public double? Left { get; set; }
+
+    [JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)]
+    public double? Top { get; set; }
     public double Opacity { get; set; } = OverlayOpacityPolicy.Default;
     public bool StartWithWindows { get; set; }
     public bool PositionLocked { get; set; }
@@ -31,6 +43,8 @@ public sealed class AppSettings
     public AppSettings Clone() =>
         new()
         {
+            PositionX = PositionX,
+            PositionY = PositionY,
             Left = Left,
             Top = Top,
             Opacity = Opacity,
@@ -43,8 +57,10 @@ public sealed class AppSettings
 }
 
 internal readonly record struct AppSettingsSnapshot(
-    double Left,
-    double Top,
+    double? PositionX,
+    double? PositionY,
+    double? Left,
+    double? Top,
     double Opacity,
     bool StartWithWindows,
     bool PositionLocked,
@@ -56,6 +72,8 @@ internal readonly record struct AppSettingsSnapshot(
     {
         ArgumentNullException.ThrowIfNull(settings);
         return new AppSettingsSnapshot(
+            settings.PositionX,
+            settings.PositionY,
             settings.Left,
             settings.Top,
             settings.Opacity,
@@ -68,6 +86,8 @@ internal readonly record struct AppSettingsSnapshot(
 
     public AppSettings ToSettings() => new()
     {
+        PositionX = PositionX,
+        PositionY = PositionY,
         Left = Left,
         Top = Top,
         Opacity = Opacity,
@@ -131,8 +151,8 @@ public sealed class SettingsStore
                                new string(buffer, 0, length),
                                JsonOptions) ??
                            new AppSettings();
-            settings.Left = double.IsFinite(settings.Left) ? settings.Left : double.NaN;
-            settings.Top = double.IsFinite(settings.Top) ? settings.Top : double.NaN;
+            (settings.PositionX, settings.PositionY) = CoordinatePair(settings.PositionX, settings.PositionY, round: true);
+            (settings.Left, settings.Top) = CoordinatePair(settings.Left, settings.Top, round: false);
             settings.Opacity = OverlayOpacityPolicy.Clamp(settings.Opacity);
             settings.NameDisplayMode = Enum.IsDefined(settings.NameDisplayMode)
                 ? settings.NameDisplayMode
@@ -147,6 +167,29 @@ public sealed class SettingsStore
         {
             return new AppSettings();
         }
+    }
+
+    /// <summary>
+    /// Keeps a saved coordinate pair only when both halves are finite and within
+    /// <see cref="OverlayPlacement.MaximumCoordinateMagnitude"/>; anything else, including a pair
+    /// with one half missing, means "no saved position". Physical pixels are rounded half away
+    /// from zero (Math.Round's default would turn 12.5 into 12).
+    /// </summary>
+    private static (double? First, double? Second) CoordinatePair(double? first, double? second, bool round)
+    {
+        static bool Usable(double? value) =>
+            value is { } number &&
+            double.IsFinite(number) &&
+            Math.Abs(number) <= OverlayPlacement.MaximumCoordinateMagnitude;
+
+        if (!Usable(first) || !Usable(second))
+        {
+            return (null, null);
+        }
+
+        return round
+            ? (Math.Round(first!.Value, MidpointRounding.AwayFromZero), Math.Round(second!.Value, MidpointRounding.AwayFromZero))
+            : (first, second);
     }
 
     internal async Task SaveAsync(

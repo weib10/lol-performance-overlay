@@ -1,5 +1,6 @@
 using System.Windows;
 using System.Windows.Controls;
+using System.Windows.Interop;
 using System.Windows.Media;
 using LolPerformanceOverlay.Core.Interaction;
 using LolPerformanceOverlay.Core.Presentation;
@@ -39,7 +40,12 @@ public sealed class SettingsWindow : Window
         // Grow with the content instead of a fixed height: each new section used to push the
         // Save row out of a hard-coded height. On a short screen the content scrolls instead.
         SizeToContent = SizeToContent.Height;
+        // SystemParameters.WorkArea is the primary monitor's, in the primary's DIPs. Once the
+        // dialog has a window handle (and so a monitor and a DPI), the cap is corrected to the
+        // monitor it actually opened on -- a 100 % secondary is often much shorter.
         MaxHeight = SystemParameters.WorkArea.Height;
+        SourceInitialized += (_, _) => CapHeightToMonitor();
+        DpiChanged += (_, _) => CapHeightToMonitor();
         // The Overlay is Topmost, so an unowned dialog opens underneath it and its
         // controls cannot be reached. Owning the dialog puts it above its owner, and
         // Topmost keeps it above the game as well.
@@ -168,11 +174,7 @@ public sealed class SettingsWindow : Window
             Margin = new Thickness(0, 20, 0, 0)
         };
         var reset = Button(ActionLabels.ResetPosition);
-        reset.Click += (_, _) =>
-        {
-            _working.Left = double.NaN;
-            _working.Top = double.NaN;
-        };
+        reset.Click += (_, _) => PositionResetRequested = true;
         var cancel = Button("取消");
         cancel.Click += (_, _) => DialogResult = false;
         var save = Button("儲存");
@@ -204,6 +206,21 @@ public sealed class SettingsWindow : Window
     }
 
     public AppSettings Result => _working;
+
+    /// <summary>
+    /// Set by the reset button and acted on by the caller after Save. Kept here rather than on
+    /// <see cref="Result"/>, which is an AppSettings and would be written to settings.json.
+    /// </summary>
+    public bool PositionResetRequested { get; private set; }
+
+    private void CapHeightToMonitor()
+    {
+        var handle = new WindowInteropHelper(this).Handle;
+        if (DisplayMonitors.WorkAreaFor(handle) is { } workArea)
+        {
+            MaxHeight = workArea.Height / VisualTreeHelper.GetDpi(this).DpiScaleY;
+        }
+    }
 
     private void Save()
     {

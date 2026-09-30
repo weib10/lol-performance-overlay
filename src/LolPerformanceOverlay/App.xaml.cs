@@ -78,6 +78,10 @@ public partial class App : System.Windows.Application
             argument.Equals("--demo-expanded", StringComparison.OrdinalIgnoreCase));
         _demoExpanded = e.Args.Any(argument =>
             argument.Equals("--demo-expanded", StringComparison.OrdinalIgnoreCase));
+        // Adds a read-only "診斷資訊" entry to the overlay's right-click menu (the DPI
+        // placement counters). Works with or without --demo; nothing else changes.
+        var showDiagnostics = e.Args.Any(argument =>
+            argument.Equals("--diagnostics", StringComparison.OrdinalIgnoreCase));
         if (!_isDemo)
         {
             _positionSave = new LatestValueDebouncer<AppSettingsSnapshot>(
@@ -88,13 +92,18 @@ public partial class App : System.Windows.Application
         var windowSettings = _settings.Clone();
         if (_isDemo)
         {
-            windowSettings.Left = double.NaN;
-            windowSettings.Top = double.NaN;
+            windowSettings.PositionX = null;
+            windowSettings.PositionY = null;
+            windowSettings.Left = null;
+            windowSettings.Top = null;
         }
 
-        _overlay = new OverlayWindow(windowSettings);
-        var handle = new WindowInteropHelper(_overlay).EnsureHandle();
+        _overlay = new OverlayWindow(windowSettings, showDiagnostics);
+
+        // Subscribed before EnsureHandle: the window places itself while its handle is created
+        // and reports that position once, which is what replaces a legacy Left/Top on disk.
         _overlay.PositionChanged += OnOverlayPositionChanged;
+        var handle = new WindowInteropHelper(_overlay).EnsureHandle();
         _overlay.OpacityChanged += OnOverlayOpacityChanged;
         _overlay.SettingsRequested += OpenSettings;
         _overlay.OpenExternalLinkRequested += OpenExternalLink;
@@ -360,8 +369,6 @@ public partial class App : System.Windows.Application
             return;
         }
 
-        _settings.Left = dialog.Result.Left;
-        _settings.Top = dialog.Result.Top;
         _settings.Opacity = dialog.Result.Opacity;
         _settings.StartWithWindows = dialog.Result.StartWithWindows;
         _settings.PositionLocked = dialog.Result.PositionLocked;
@@ -372,6 +379,13 @@ public partial class App : System.Windows.Application
         _tray?.UpdateStartup(_settings.StartWithWindows);
         _tray?.UpdatePositionLocked(_settings.PositionLocked);
         _overlay.ApplySettings(_settings);
+        if (dialog.PositionResetRequested)
+        {
+            // Position is not copied from the dialog: the overlay reports where it actually is
+            // through PositionChanged, which is the only thing that writes it.
+            _overlay.ResetPosition();
+        }
+
         var hotkeyResult = HotkeyRegistrationPolicy.Register(
             _settings.Hotkey,
             "Ctrl+Shift+F9",
@@ -760,15 +774,17 @@ public partial class App : System.Windows.Application
             TaskScheduler.Default);
     }
 
-    private void OnOverlayPositionChanged(double left, double top)
+    private void OnOverlayPositionChanged(int x, int y)
     {
         if (_settings is null || _isDemo)
         {
             return;
         }
 
-        _settings.Left = left;
-        _settings.Top = top;
+        _settings.PositionX = x;
+        _settings.PositionY = y;
+        _settings.Left = null;
+        _settings.Top = null;
         QueueSettingsSave(flushImmediately: false);
     }
 

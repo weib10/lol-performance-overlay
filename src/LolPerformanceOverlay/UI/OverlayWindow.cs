@@ -28,6 +28,7 @@ public sealed class OverlayWindow : Window
     private const int WsExNoActivate = 0x08000000;
     private const int WmMouseActivate = 0x0021;
     private const int WmNcHitTest = 0x0084;
+    private const int WmDpiChanged = 0x02E0;
     private const int MaNoActivate = 3;
     private const int HtTransparent = -1;
     private const uint SwpNoSize = 0x0001;
@@ -51,6 +52,13 @@ public sealed class OverlayWindow : Window
     private readonly AppSettings _settings;
     private readonly ChampionImageCache _imageCache = new();
     private readonly PointerInteractionStateMachine _pointer = new(5);
+    // Every rule about where the window may be put lives in the controller (see its summary);
+    // this class only reads and writes Win32 for it. The window never reads or writes WPF's
+    // Left/Top: under PerMonitorV2 they are converted with whatever DPI the window has at that
+    // moment and go stale after a cross-DPI move.
+    private readonly OverlayPlacementController _placement = new();
+    private readonly StartupPosition _startupPosition;
+    private readonly bool _showDiagnostics;
     private readonly List<AvatarView> _compactAvatars = [];
     private readonly List<PlayerRowView> _playerRows = [];
     private readonly List<TeamView> _teamViews = [];
@@ -75,17 +83,23 @@ public sealed class OverlayWindow : Window
     private Uri? _opGgDestination;
     private bool _visualWasChampSelect;
     private bool _releasingCapture;
-    private DipPoint _dragPointerOrigin;
-    private DipPoint _dragWindowOrigin;
+    // The DPI scale when the button went down, used for the whole gesture's click/drag threshold:
+    // an automatic mode switch can move the window to another DPI before the threshold is
+    // crossed, and the same physical cursor would then convert to a very different DIP point.
+    private double _gestureDpiScale = 1;
     private bool _clamping;
+    private bool _placing;
     private IntPtr _windowHandle;
     private Slider? _menuOpacitySlider;
     private TextBlock? _menuOpacityValue;
     private bool _suppressMenuOpacityChangedEvent;
+    private MenuItem? _diagnosticsItem;
 
-    public OverlayWindow(AppSettings settings)
+    public OverlayWindow(AppSettings settings, bool showDiagnostics = false)
     {
         _settings = settings;
+        _showDiagnostics = showDiagnostics;
+        _startupPosition = new StartupPosition(settings.PositionX, settings.PositionY, settings.Left, settings.Top);
         WindowStyle = WindowStyle.None;
         AllowsTransparency = true;
         Background = Brushes.Transparent;
@@ -96,8 +110,6 @@ public sealed class OverlayWindow : Window
         ResizeMode = ResizeMode.NoResize;
         Mode = OverlayMode.Dot;
         Opacity = OverlayOpacityPolicy.Clamp(settings.Opacity);
-        Left = double.IsFinite(settings.Left) ? settings.Left : SystemParameters.WorkArea.Right - 58;
-        Top = double.IsFinite(settings.Top) ? settings.Top : SystemParameters.WorkArea.Top + 96;
 
         _pointer.HandlePositionLock(settings.PositionLocked);
         SourceInitialized += OnSourceInitialized;
@@ -106,7 +118,12 @@ public sealed class OverlayWindow : Window
         PreviewMouseMove += OnPointerMove;
         PreviewMouseLeftButtonUp += OnPointerUp;
         LostMouseCapture += OnLostMouseCapture;
-        DpiChanged += (_, _) => ClampToVisibleWorkArea();
+        // Deferred so WPF has applied the new DPI's size first. The controller turns both into
+        // no-ops while a drag is in progress, checked when they run rather than when queued.
+        DpiChanged += (_, _) => Dispatcher.BeginInvoke(ClampToVisibleWorkArea);
+        // Expanded sizes itself to its content, which grows and shrinks with the snapshot (team
+        // cards, the OP.GG button, champ select). Nothing clamped after that before.
+        SizeChanged += (_, _) => Dispatcher.BeginInvoke(ClampToVisibleWorkArea);
         Closed += OnClosed;
         SystemEvents.DisplaySettingsChanged += OnDisplaySettingsChanged;
 
@@ -124,9 +141,12 @@ public sealed class OverlayWindow : Window
         ContextMenu = BuildContextMenu();
         ContextMenuOpening += OnContextMenuOpening;
 
-        BuildModeVisual();
+        // No HWND yet, so nothing to position: the size is applied now so the first
+        // SourceInitialized sees Dot's 38 x 38, and placement happens there.
+        var (content, size) = BuildModeVisual();
+        Content = content;
+        ApplyModeSize(size);
         UpdateVisibleControls();
-        ClampToVisibleWorkArea();
     }
 
     public OverlayMode Mode { get; private set; }
@@ -135,8 +155,13 @@ public sealed class OverlayWindow : Window
     public long VisualTreeBuildCount { get; private set; }
     public long ChampionImageDecodeCount => _imageCache.DecodeCount;
     public long ChampionImageCacheHits => _imageCache.CacheHits;
+    public int DpiChangeCount => _placement.DpiChangeCount;
+    public int ForcedDpiPlacementCount => _placement.ForcedDpiPlacementCount;
+    public int UntriggeredStagingCount => _placement.UntriggeredStagingCount;
+    internal string? HomeDisplayId => _placement.HomeDisplayId;
 
-    public event Action<double, double>? PositionChanged;
+    /// <summary>The top-left in physical pixels, raised once per completed move.</summary>
+    public event Action<int, int>? PositionChanged;
     public event Action? SettingsRequested;
     public event Action<Uri>? OpenExternalLinkRequested;
     // Raised only for a user-driven drag of the right-click menu's opacity slider (see
@@ -166,8 +191,7 @@ public sealed class OverlayWindow : Window
         _snapshot = snapshot;
         if (structureChanged)
         {
-            BuildModeVisual();
-            UpdateVisibleControls();
+            RebuildVisual();
         }
         else
         {
@@ -198,9 +222,7 @@ public sealed class OverlayWindow : Window
         if (Mode != mode)
         {
             Mode = mode;
-            BuildModeVisual();
-            UpdateVisibleControls();
-            ClampToVisibleWorkArea();
+            RebuildVisual();
         }
 
         ShowWithoutActivation();
@@ -223,25 +245,20 @@ public sealed class OverlayWindow : Window
 
     public void ResetPosition()
     {
-        var workAreas = GetWorkAreas();
-        var result = OverlayPlacement.Clamp(
-            new DipPoint(double.NaN, double.NaN),
-            CurrentDipSize(),
-            workAreas);
-        Left = result.Position.X;
-        Top = result.Position.Y;
-        PositionChanged?.Invoke(Left, Top);
+        if (TryGetWindowRect(out var current))
+        {
+            ApplyMove(_placement.Reset(current, WindowDpi(), CurrentDipSize(), Displays()));
+        }
     }
 
     public void ApplySettings(AppSettings settings)
     {
         Opacity = OverlayOpacityPolicy.Clamp(settings.Opacity);
         SetPositionLocked(settings.PositionLocked);
-        if (!double.IsFinite(settings.Left) || !double.IsFinite(settings.Top))
-        {
-            ResetPosition();
-        }
 
+        // No position is read from settings here: a reset is an explicit request
+        // (SettingsWindow.PositionResetRequested), not something inferred from missing fields,
+        // or a user upgrading from a DIP-based version would be sent to the corner on Save.
         ClampToVisibleWorkArea();
 
         // A NameDisplayMode change does not touch OverlaySnapshot at all, so nothing about it
@@ -356,7 +373,17 @@ public sealed class OverlayWindow : Window
         // ItemsControl and the menu is fixed anyway, but the per-entry Add spelling collides
         // with the release scan's raw-field word list, which cannot distinguish a WPF
         // collection property from a scoreboard field this window must never carry.
-        menu.ItemsSource = new object[] { opacityItem, new Separator(), openSettings };
+        // --diagnostics only: the counters that show whether the DPI safety nets ever fired
+        // (see OverlayPlacementController). Built into the source array for the same reason.
+        if (_showDiagnostics)
+        {
+            _diagnosticsItem = new MenuItem { Foreground = Brushes.White, IsEnabled = false };
+            menu.ItemsSource = new object[] { opacityItem, new Separator(), openSettings, new Separator(), _diagnosticsItem };
+        }
+        else
+        {
+            menu.ItemsSource = new object[] { opacityItem, new Separator(), openSettings };
+        }
 
         return menu;
     }
@@ -374,6 +401,14 @@ public sealed class OverlayWindow : Window
             // weakening the lock.
             e.Handled = true;
             return;
+        }
+
+        if (_diagnosticsItem is not null)
+        {
+            // Read on every open: built once, it would show 0 forever, and 0 is also the
+            // expected value, so a stale readout would look like a pass.
+            _diagnosticsItem.Header =
+                $"診斷資訊：DPI 變更 {DpiChangeCount}、強制放置 {ForcedDpiPlacementCount}、未觸發 {UntriggeredStagingCount}";
         }
 
         if (_menuOpacitySlider is null)
@@ -438,7 +473,64 @@ public sealed class OverlayWindow : Window
         }
     }
 
-    private void BuildModeVisual()
+    /// <summary>
+    /// Rebuilds the current mode's visual and resizes the window for it, moving the window first
+    /// so the new size fits inside home. Resizing first would let a window near the edge between
+    /// two monitors spill mostly onto the other one for a moment, and Windows would switch its
+    /// DPI during the resize itself -- the whole panel would flash at the other monitor's scale.
+    /// </summary>
+    private void RebuildVisual()
+    {
+        var (content, size) = BuildModeVisual();
+
+        // Filled in before measuring: with no teams yet, Expanded's cards are collapsed, and
+        // measuring them visible would position the panel for a height it does not have.
+        UpdateVisibleControls();
+        if (TryGetWindowRect(out var current) &&
+            _placement.PrePosition(current, WindowDpi(), MeasureModeSize(content, size), Displays()) is { } move)
+        {
+            ApplyMove(move);
+        }
+
+        _placement.EndDpiChain();
+        Content = content;
+        ApplyModeSize(size);
+
+        // A safety net. Layout rounding can differ by a pixel from the detached measure; the
+        // deferred SizeChanged clamp covers what this reads before layout has run.
+        ClampToVisibleWorkArea();
+    }
+
+    /// <summary>A mode's window size in DIPs; a null height means the height follows the content.</summary>
+    private readonly record struct ModeSize(double Width, double? Height);
+
+    private void ApplyModeSize(ModeSize size)
+    {
+        if (size.Height is { } height)
+        {
+            SizeToContent = SizeToContent.Manual;
+            Width = size.Width;
+            Height = height;
+        }
+        else
+        {
+            Width = size.Width;
+            SizeToContent = SizeToContent.Height;
+        }
+    }
+
+    private static DipSize MeasureModeSize(UIElement content, ModeSize size)
+    {
+        if (size.Height is { } height)
+        {
+            return new DipSize(size.Width, height);
+        }
+
+        content.Measure(new Size(size.Width, double.PositiveInfinity));
+        return new DipSize(size.Width, Math.Max(1, content.DesiredSize.Height));
+    }
+
+    private (UIElement Content, ModeSize Size) BuildModeVisual()
     {
         _visualGenerationCancellation.Cancel();
         _visualGenerationCancellation.Dispose();
@@ -458,22 +550,19 @@ public sealed class OverlayWindow : Window
         _opGgButton = null;
         _visualWasChampSelect = _snapshot.Phase == LeaguePhase.ChampSelect;
 
-        Content = Mode switch
+        (UIElement Content, ModeSize Size) built = Mode switch
         {
-            OverlayMode.Dot => BuildDot(),
-            OverlayMode.Compact => BuildCompact(),
-            OverlayMode.Expanded => BuildExpanded(),
-            _ => BuildDot()
+            OverlayMode.Compact => (BuildCompact(), new ModeSize(460, _visualWasChampSelect ? 120 : 112)),
+            OverlayMode.Expanded => (BuildExpanded(), new ModeSize(520, null)),
+            _ => (BuildDot(), new ModeSize(38, 38))
         };
         Cursor = IsPositionLocked ? Cursors.Arrow : Cursors.SizeAll;
         VisualTreeBuildCount++;
+        return built;
     }
 
     private UIElement BuildDot()
     {
-        SizeToContent = SizeToContent.Manual;
-        Width = 38;
-        Height = 38;
         var root = new Grid
         {
             Background = Brushes.Transparent,
@@ -493,9 +582,6 @@ public sealed class OverlayWindow : Window
 
     private UIElement BuildCompact()
     {
-        SizeToContent = SizeToContent.Manual;
-        Width = 460;
-        Height = _visualWasChampSelect ? 120 : 112;
         var root = Card();
         var stack = new StackPanel();
         stack.Children.Add(BuildHeader(allowSettings: false));
@@ -553,11 +639,9 @@ public sealed class OverlayWindow : Window
     private UIElement BuildExpanded()
     {
         // A fixed height cannot fit champ select and a live game without leaving dead space in
-        // the shorter of the two. Let the content decide; ClampToWorkArea reads ActualHeight
-        // while this is on. The old bottom history block used to add a third, taller state to
-        // that same problem; removing it (see the header's OP.GG button) only shrank the range.
-        Width = 520;
-        SizeToContent = SizeToContent.Height;
+        // the shorter of the two, so BuildModeVisual sizes this to its content. The old bottom
+        // history block used to add a third, taller state to that same problem; removing it
+        // (see the header's OP.GG button) only shrank the range.
         var root = Card();
         var layout = new DockPanel();
         var header = BuildHeader(allowSettings: true, allowOpGg: true);
@@ -1371,7 +1455,16 @@ public sealed class OverlayWindow : Window
             return;
         }
 
+        _gestureDpiScale = WindowDpi() / 96d;
         ProcessPointerActions(_pointer.HandleDown(PointerPosition()));
+
+        // After the actions have run: pressing again mid-gesture first cancels the old gesture,
+        // and that cancel may clamp (move) the window.
+        if (TryGetWindowRect(out var window))
+        {
+            _placement.BeginGesture(CursorPosition(), new PixelPoint(window.X, window.Y));
+        }
+
         e.Handled = true;
     }
 
@@ -1431,33 +1524,61 @@ public sealed class OverlayWindow : Window
                 case { Kind: PointerActionKind.Click } when Mode == OverlayMode.Dot:
                     CycleMode();
                     break;
-                case { Kind: PointerActionKind.BeginDrag } begin:
-                    _dragPointerOrigin = begin.Origin;
-                    _dragWindowOrigin = new DipPoint(Left, Top);
-                    MoveWindowToPointer(begin.Position);
+                case { Kind: PointerActionKind.BeginDrag }:
+                    _placement.BeginDrag();
+                    MoveWindowToPointer();
                     break;
-                case { Kind: PointerActionKind.DragTo } drag:
-                    MoveWindowToPointer(drag.Position);
+                case { Kind: PointerActionKind.DragTo }:
+                    MoveWindowToPointer();
                     break;
-                case { Kind: PointerActionKind.EndDrag } end:
-                    MoveWindowToPointer(end.Position);
-                    ClampToVisibleWorkArea();
+                case { Kind: PointerActionKind.EndDrag }:
+                    MoveWindowToPointer();
+                    EndGesture();
+                    break;
+                case { Kind: PointerActionKind.CancelGesture }:
+                    // Lost capture (Alt+Tab, the game taking focus) or locked mid-drag: the
+                    // window may be left straddling monitors or off screen, so it is settled
+                    // the same way as a normal drop. Harmless when nothing moved.
+                    EndGesture();
                     break;
             }
         }
     }
 
-    private void MoveWindowToPointer(DipPoint current)
+    private void MoveWindowToPointer()
     {
-        Left = _dragWindowOrigin.X + current.X - _dragPointerOrigin.X;
-        Top = _dragWindowOrigin.Y + current.Y - _dragPointerOrigin.Y;
+        if (_windowHandle == IntPtr.Zero)
+        {
+            return;
+        }
+
+        _placement.EndDpiChain();
+        var position = _placement.DragTo(CursorPosition());
+        SetWindowPos(_windowHandle, IntPtr.Zero, position.X, position.Y, 0, 0, SwpNoSize | SwpNoZOrder | SwpNoActivate);
     }
 
+    private void EndGesture()
+    {
+        if (TryGetWindowRect(out var current) &&
+            _placement.EndGesture(current, WindowDpi(), CurrentDipSize(), Displays()) is { } move)
+        {
+            ApplyMove(move);
+        }
+    }
+
+    /// <summary>
+    /// Only feeds the click/drag threshold: the cursor in DIPs at the scale the window had when
+    /// the button went down. The drag itself moves by physical cursor pixels (see
+    /// OverlayPlacementController.DragTo).
+    /// </summary>
     private DipPoint PointerPosition()
     {
-        var local = Mouse.GetPosition(this);
-        return new DipPoint(Left + local.X, Top + local.Y);
+        var cursor = CursorPosition();
+        return new DipPoint(cursor.X / _gestureDpiScale, cursor.Y / _gestureDpiScale);
     }
+
+    private static PixelPoint CursorPosition() =>
+        GetCursorPos(out var point) ? new PixelPoint(point.X, point.Y) : default;
 
     private void OnSourceInitialized(object? sender, EventArgs e)
     {
@@ -1465,8 +1586,19 @@ public sealed class OverlayWindow : Window
         var style = GetWindowLong(_windowHandle, GwlExStyle);
         SetWindowLong(_windowHandle, GwlExStyle, style | WsExToolWindow | WsExNoActivate);
         ApplyWindowInteractionStyle();
+
+        // The hook goes on before the first placement, so the WM_DPICHANGED that placement can
+        // trigger (the window is created on the primary monitor) goes through the controller.
         _source = HwndSource.FromHwnd(_windowHandle);
         _source?.AddHook(WndProc);
+
+        // The window still sits where CW_USEDEFAULT put it; only its size is meaningful here,
+        // and the controller decides the position from what was saved. ApplyMove always
+        // raises PositionChanged, which is what migrates a legacy Left/Top in settings.json.
+        if (TryGetWindowRect(out var current))
+        {
+            ApplyMove(_placement.Startup(_startupPosition, current, WindowDpi(), CurrentDipSize(), Displays()));
+        }
     }
 
     private void ApplyWindowInteractionStyle()
@@ -1496,9 +1628,11 @@ public sealed class OverlayWindow : Window
 
     private void OnLocationChanged(object? sender, EventArgs e)
     {
-        if (!_clamping && double.IsFinite(Left) && double.IsFinite(Top))
+        // Moves made through ApplyMove report once, at the end; this covers the drag and the
+        // moves WPF makes while applying a WM_DPICHANGED rectangle.
+        if (!_clamping && !_placing && TryGetWindowRect(out var rect))
         {
-            PositionChanged?.Invoke(Left, Top);
+            PositionChanged?.Invoke(rect.X, rect.Y);
         }
     }
 
@@ -1511,45 +1645,91 @@ public sealed class OverlayWindow : Window
         _visualGenerationCancellation.Dispose();
         SystemEvents.DisplaySettingsChanged -= OnDisplaySettingsChanged;
         _source?.RemoveHook(WndProc);
+
+        // Clamps queued before closing (for example the DpiChanged one after a reset) still run;
+        // with the handle cleared they stop instead of measuring and moving a destroyed window.
+        _windowHandle = IntPtr.Zero;
     }
 
     private void ClampToVisibleWorkArea()
     {
-        if (_clamping || !double.IsFinite(Width) || !double.IsFinite(Height))
+        if (_clamping || !TryGetWindowRect(out var current))
         {
             return;
         }
 
-        var original = new DipPoint(Left, Top);
-        var adjusted = false;
         _clamping = true;
         try
         {
-            var result = OverlayPlacement.Clamp(
-                new DipPoint(Left, Top),
-                CurrentDipSize(),
-                GetWorkAreas());
-            Left = result.Position.X;
-            Top = result.Position.Y;
-            adjusted = result.Position != original;
+            if (_placement.Clamp(current, WindowDpi(), CurrentDipSize(), Displays()) is { } move)
+            {
+                ApplyMove(move);
+            }
         }
         finally
         {
             _clamping = false;
         }
+    }
 
-        if (adjusted && double.IsFinite(Left) && double.IsFinite(Top))
+    /// <summary>
+    /// The one way the app moves the window. A staging point comes first when the plain move
+    /// would not make Windows switch the window to the destination's DPI (see
+    /// PlacementMove). Both SetWindowPos calls carry SWP_NOACTIVATE, so the overlay never takes
+    /// focus from the game. PositionChanged is raised once, for the final position only.
+    /// </summary>
+    private void ApplyMove(PlacementMove move)
+    {
+        if (_windowHandle == IntPtr.Zero)
         {
-            PositionChanged?.Invoke(Left, Top);
+            return;
+        }
+
+        _placing = true;
+        try
+        {
+            _placement.EndDpiChain();
+            if (move.Staging is { } staging)
+            {
+                SetWindowPos(_windowHandle, IntPtr.Zero, staging.X, staging.Y, 0, 0, SwpNoSize | SwpNoZOrder | SwpNoActivate);
+                _placement.EndDpiChain();
+            }
+
+            SetWindowPos(_windowHandle, IntPtr.Zero, move.Final.X, move.Final.Y, 0, 0, SwpNoSize | SwpNoZOrder | SwpNoActivate);
+        }
+        finally
+        {
+            _placing = false;
+        }
+
+        if (TryGetWindowRect(out var after))
+        {
+            _placement.CompleteMove(WindowDpi(), new PixelPoint(after.X, after.Y));
+            PositionChanged?.Invoke(after.X, after.Y);
         }
     }
 
-    private IReadOnlyList<DisplayWorkArea> GetWorkAreas()
+    private bool TryGetWindowRect(out PixelRect rect)
+    {
+        rect = default;
+        if (_windowHandle == IntPtr.Zero || !GetWindowRect(_windowHandle, out var native))
+        {
+            return false;
+        }
+
+        rect = native.ToPixelRect();
+        return rect.IsValid;
+    }
+
+    private uint WindowDpi() =>
+        _windowHandle == IntPtr.Zero ? 96 : Math.Max(96, GetDpiForWindow(_windowHandle));
+
+    private IReadOnlyList<PhysicalDisplayWorkArea> Displays()
     {
         var fallbackDpi = VisualTreeHelper.GetDpi(this);
-        var fallbackDpiX = (uint)Math.Max(96, Math.Round(fallbackDpi.PixelsPerInchX));
-        var fallbackDpiY = (uint)Math.Max(96, Math.Round(fallbackDpi.PixelsPerInchY));
-        return DisplayTopologyConverter.ToDips(DisplayMonitors.Enumerate(fallbackDpiX, fallbackDpiY));
+        return DisplayMonitors.Enumerate(
+            (uint)Math.Max(96, Math.Round(fallbackDpi.PixelsPerInchX)),
+            (uint)Math.Max(96, Math.Round(fallbackDpi.PixelsPerInchY)));
     }
 
     private IntPtr WndProc(IntPtr hwnd, int message, IntPtr wParam, IntPtr lParam, ref bool handled)
@@ -1558,6 +1738,33 @@ public sealed class OverlayWindow : Window
         {
             handled = true;
             return new IntPtr(MaNoActivate);
+        }
+
+        if (message == WmDpiChanged)
+        {
+            // Rewrites Windows' suggested rectangle and leaves handled false, so WPF applies the
+            // rewritten one with the new DPI. Windows re-checks the monitor as soon as it is
+            // applied and would loop forever on a bad answer; see DpiTransition.
+            if (TryGetWindowRect(out var current))
+            {
+                var suggested = Marshal.PtrToStructure<NativeRect>(lParam).ToPixelRect();
+                var result = _placement.OnDpiChanged(
+                    current,
+                    suggested,
+                    (uint)(wParam.ToInt64() & 0xFFFF),
+                    CurrentDipSize(),
+                    Displays());
+                Marshal.StructureToPtr(NativeRect.From(result.Rect), lParam, fDeleteOld: false);
+                if (result.StartedChain)
+                {
+                    // The chain runs synchronously inside one SetWindowPos, so this runs after it.
+                    // Not ApplicationIdle: idle work waits while input is pending, and a long drag
+                    // would pile separate crossings into one "chain".
+                    Dispatcher.BeginInvoke(_placement.EndDpiChain, System.Windows.Threading.DispatcherPriority.Normal);
+                }
+            }
+
+            return IntPtr.Zero;
         }
 
         if (message != WmNcHitTest)
@@ -1746,6 +1953,41 @@ public sealed class OverlayWindow : Window
 
     [DllImport("user32.dll")]
     private static extern bool ShowWindow(IntPtr windowHandle, int command);
+
+    [DllImport("user32.dll")]
+    private static extern bool GetWindowRect(IntPtr windowHandle, out NativeRect rect);
+
+    [DllImport("user32.dll")]
+    private static extern bool GetCursorPos(out NativePoint point);
+
+    [DllImport("user32.dll")]
+    private static extern uint GetDpiForWindow(IntPtr windowHandle);
+
+    [StructLayout(LayoutKind.Sequential)]
+    private struct NativePoint
+    {
+        public int X;
+        public int Y;
+    }
+
+    [StructLayout(LayoutKind.Sequential)]
+    private struct NativeRect
+    {
+        public int Left;
+        public int Top;
+        public int Right;
+        public int Bottom;
+
+        public readonly PixelRect ToPixelRect() => new(Left, Top, Right - Left, Bottom - Top);
+
+        public static NativeRect From(PixelRect rect) => new()
+        {
+            Left = rect.X,
+            Top = rect.Y,
+            Right = rect.X + rect.Width,
+            Bottom = rect.Y + rect.Height
+        };
+    }
 
     [DllImport("user32.dll", SetLastError = true)]
     private static extern bool SetWindowPos(
