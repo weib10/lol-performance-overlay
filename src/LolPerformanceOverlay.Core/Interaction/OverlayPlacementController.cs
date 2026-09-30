@@ -66,6 +66,14 @@ public sealed class OverlayPlacementController
     /// <summary>Moves after which the window did not have the destination's DPI. Expected 0.</summary>
     public int UntriggeredStagingCount { get; private set; }
 
+    /// <summary>
+    /// Whether the position <see cref="Startup"/> chose should be written back to settings: only
+    /// a legacy DIP position that landed where it converts to. A position pulled back on screen
+    /// is not written, so an overlay saved on a monitor that is unplugged today returns to it
+    /// when the monitor is back.
+    /// </summary>
+    public bool StartupMigratesLegacyPosition { get; private set; }
+
     public PlacementMove Startup(
         StartupPosition saved,
         PixelRect current,
@@ -82,6 +90,9 @@ public sealed class OverlayPlacementController
             home,
             _marginDips);
         HomeDisplayId = result.DisplayId;
+        StartupMigratesLegacyPosition = !result.WasAdjusted &&
+            !OverlayPlacement.HasCoordinates(saved.PositionX, saved.PositionY) &&
+            OverlayPlacement.HasCoordinates(saved.LegacyLeft, saved.LegacyTop);
         return Move(current, currentWindowDpi, result.Position, result.DisplayId, displays);
     }
 
@@ -207,7 +218,8 @@ public sealed class OverlayPlacementController
             _chainOrigin,
             contentSize,
             _marginDips,
-            force);
+            force,
+            IsDragging ? _lastDragCursor : null);
         _windowTopLeft = new PixelPoint(rect.X, rect.Y);
         if (IsDragging && _anchor is { } anchor)
         {

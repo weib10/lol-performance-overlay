@@ -93,13 +93,15 @@ public static class OverlayPlacement
     /// system DPI / monitor DPI, and WPF then divides by the system DPI, so an old saved value is
     /// physical × 96 / that monitor's DPI whatever the system DPI was. Measured on a
     /// 150 % + 100 % desktop (2026-09-30); a monitor layout this does not cover falls back to the
-    /// primary monitor's DPI and is then pulled back on screen by <see cref="Clamp"/>.
+    /// primary monitor's DPI and is then pulled back on screen by <see cref="Clamp"/>. Those old
+    /// ranges can overlap (a 200 % monitor right of a 100 % primary); the primary is checked
+    /// first because its range is exact whatever the layout.
     /// </summary>
     public static PixelPoint FromLegacyDips(DipPoint legacy, IReadOnlyList<PhysicalDisplayWorkArea> displays)
     {
         ValidateDisplays(displays);
         var chosen = Primary(displays);
-        foreach (var display in displays)
+        foreach (var display in displays.OrderByDescending(display => display.IsPrimary))
         {
             var scaleX = Scale(display.DpiX);
             var scaleY = Scale(display.DpiY);
@@ -136,7 +138,7 @@ public static class OverlayPlacement
             return new PixelPoint(x, y);
         }
 
-        if (IsSaneCoordinate(legacyLeft) && IsSaneCoordinate(legacyTop))
+        if (HasCoordinates(legacyLeft, legacyTop))
         {
             return FromLegacyDips(new DipPoint(legacyLeft!.Value, legacyTop!.Value), displays);
         }
@@ -320,6 +322,9 @@ public static class OverlayPlacement
         Math.Abs((long)bounds.Y) <= MaximumCoordinateMagnitude &&
         bounds.Width <= MaximumCoordinateMagnitude &&
         bounds.Height <= MaximumCoordinateMagnitude;
+
+    /// <summary>Whether a saved pair is usable: both present, finite and within range.</summary>
+    public static bool HasCoordinates(double? x, double? y) => IsSaneCoordinate(x) && IsSaneCoordinate(y);
 
     private static bool IsSaneCoordinate(double? value) =>
         value is { } number && double.IsFinite(number) && Math.Abs(number) <= MaximumCoordinateMagnitude;

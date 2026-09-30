@@ -41,7 +41,8 @@ public static class DpiTransition
         PixelPoint chainOrigin,
         DipSize contentSize,
         double marginDips,
-        bool forceInsideTarget)
+        bool forceInsideTarget,
+        PixelPoint? dragCursor = null)
     {
         OverlayPlacement.ValidateDisplays(displays);
         var target = OverlayPlacement.MostArea(current.X, current.Y, current.Width, current.Height, displays);
@@ -57,22 +58,40 @@ public static class DpiTransition
         }
 
         return mode == DpiTransitionMode.Dragging
-            ? WhileDragging(current, suggested, target, displays)
+            ? WhileDragging(current, suggested, target, displays, dragCursor)
             : Anchored(suggested, newDpi, target, displays, homeDisplayId, chainOrigin, contentSize, marginDips);
     }
 
     /// <summary>
-    /// Keeps the window's centre where it was. A window crossing one edge has most of its area on
-    /// the side its centre is on, so the new-size window still belongs to the new monitor and the
-    /// DPI cannot flip back. Keeping the top-left instead (Windows' own suggestion) flips back
+    /// First choice: scale about the cursor, so the point the user is holding stays under it.
+    /// That only stands if the new-size window still belongs to the new monitor; holding the
+    /// trailing end, it would shrink back onto the old one and the DPI would flip straight back.
+    /// Then the window's centre is kept instead: a window crossing one edge has most of its area
+    /// on the side its centre is on. Keeping the top-left (Windows' own suggestion) flips back
     /// whenever the higher-DPI monitor is on the left or above.
     /// </summary>
     private static PixelRect WhileDragging(
         PixelRect current,
         PixelRect suggested,
         PhysicalDisplayWorkArea target,
-        IReadOnlyList<PhysicalDisplayWorkArea> displays)
+        IReadOnlyList<PhysicalDisplayWorkArea> displays,
+        PixelPoint? dragCursor)
     {
+        if (dragCursor is { } cursor &&
+            cursor.X >= current.X && cursor.X <= (long)current.X + current.Width &&
+            cursor.Y >= current.Y && cursor.Y <= (long)current.Y + current.Height)
+        {
+            var aboutCursor = new PixelRect(
+                cursor.X - (int)Math.Round((cursor.X - current.X) * (double)suggested.Width / current.Width),
+                cursor.Y - (int)Math.Round((cursor.Y - current.Y) * (double)suggested.Height / current.Height),
+                suggested.Width,
+                suggested.Height);
+            if (ReferenceEquals(Owner(aboutCursor, displays), target))
+            {
+                return aboutCursor;
+            }
+        }
+
         var centred = new PixelRect(
             current.X + (int)Math.Floor((current.Width - (double)suggested.Width) / 2),
             current.Y + (int)Math.Floor((current.Height - (double)suggested.Height) / 2),

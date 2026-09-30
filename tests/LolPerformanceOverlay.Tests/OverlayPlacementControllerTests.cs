@@ -227,6 +227,53 @@ public sealed class OverlayPlacementControllerTests
     }
 
     [Fact]
+    public void DpiTransitionKeepsTheHeldPointUnderTheCursorWhileDragging()
+    {
+        var current = new PixelRect(-100, 900, 57, 57);
+        var suggested = current with { Width = 38, Height = 38 };
+
+        var rect = DpiTransition.Resolve(
+            current, suggested, 96, Desktop, DpiTransitionMode.Dragging, "primary", default, Dot, 10,
+            forceInsideTarget: false, dragCursor: new PixelPoint(-90, 910));
+
+        // Held 10 px into the 57 px dot; at 38 px that point is 7 px in.
+        Assert.Equal(new PixelRect(-97, 903, 38, 38), rect);
+    }
+
+    [Fact]
+    public void DpiTransitionFallsBackToTheCentreWhenScalingAboutTheCursorWouldFlipTheDpiBack()
+    {
+        // Expanded held by its right end and dragged left: 400 of its 780 px are on the secondary,
+        // but shrunk about the cursor only 143 of 520 would be, so Windows would switch back.
+        var current = new PixelRect(-400, 900, 780, 450);
+        var suggested = current with { Width = 520, Height = 300 };
+
+        var rect = DpiTransition.Resolve(
+            current, suggested, 96, Desktop, DpiTransitionMode.Dragging, "primary", default, new DipSize(520, 300), 10,
+            forceInsideTarget: false, dragCursor: new PixelPoint(370, 910));
+
+        Assert.Equal(new PixelRect(-270, 975, 520, 300), rect);
+    }
+
+    [Theory]
+    [InlineData(-1500d, 900d, null, null, false)]
+    [InlineData(-1500d, 900d, 2000d, 500d, false)]
+    [InlineData(null, null, 2000d, 500d, true)]
+    [InlineData(12.5, null, 2000d, 500d, true)]
+    [InlineData(null, null, -3000d, 100d, false)]
+    [InlineData(-3000d, 100d, null, null, false)]
+    [InlineData(null, null, null, null, false)]
+    public void OnlyALegacyPositionThatNeededNoAdjustmentIsWrittenBackAtStartup(
+        double? x, double? y, double? legacyLeft, double? legacyTop, bool expected)
+    {
+        var controller = new OverlayPlacementController();
+
+        controller.Startup(new StartupPosition(x, y, legacyLeft, legacyTop), new PixelRect(0, 0, 57, 57), 144, Dot, Desktop);
+
+        Assert.Equal(expected, controller.StartupMigratesLegacyPosition);
+    }
+
+    [Fact]
     public void DpiTransitionAimsAnAnchoredStepAtTheHomeDpiClampFromTheChainsOrigin()
     {
         var current = new PixelRect(-530, 900, 520, 45);

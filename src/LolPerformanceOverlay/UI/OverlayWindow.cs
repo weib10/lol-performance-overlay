@@ -1593,11 +1593,12 @@ public sealed class OverlayWindow : Window
         _source?.AddHook(WndProc);
 
         // The window still sits where CW_USEDEFAULT put it; only its size is meaningful here,
-        // and the controller decides the position from what was saved. ApplyMove always
-        // raises PositionChanged, which is what migrates a legacy Left/Top in settings.json.
+        // and the controller decides the position from what was saved. It is reported (and so
+        // written to settings.json) only to migrate a legacy Left/Top.
         if (TryGetWindowRect(out var current))
         {
-            ApplyMove(_placement.Startup(_startupPosition, current, WindowDpi(), CurrentDipSize(), Displays()));
+            var move = _placement.Startup(_startupPosition, current, WindowDpi(), CurrentDipSize(), Displays());
+            ApplyMove(move, report: _placement.StartupMigratesLegacyPosition);
         }
     }
 
@@ -1678,7 +1679,7 @@ public sealed class OverlayWindow : Window
     /// PlacementMove). Both SetWindowPos calls carry SWP_NOACTIVATE, so the overlay never takes
     /// focus from the game. PositionChanged is raised once, for the final position only.
     /// </summary>
-    private void ApplyMove(PlacementMove move)
+    private void ApplyMove(PlacementMove move, bool report = true)
     {
         if (_windowHandle == IntPtr.Zero)
         {
@@ -1705,7 +1706,10 @@ public sealed class OverlayWindow : Window
         if (TryGetWindowRect(out var after))
         {
             _placement.CompleteMove(WindowDpi(), new PixelPoint(after.X, after.Y));
-            PositionChanged?.Invoke(after.X, after.Y);
+            if (report)
+            {
+                PositionChanged?.Invoke(after.X, after.Y);
+            }
         }
     }
 
