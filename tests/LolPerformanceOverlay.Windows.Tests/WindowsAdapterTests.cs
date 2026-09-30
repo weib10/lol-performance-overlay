@@ -53,8 +53,10 @@ public sealed class WindowsAdapterTests
             await store.SaveAsync(AppSettingsSnapshot.Capture(original));
             var restored = store.Load();
 
-            Assert.True(double.IsNaN(restored.Left));
-            Assert.True(double.IsNaN(restored.Top));
+            Assert.Null(restored.PositionX);
+            Assert.Null(restored.PositionY);
+            Assert.Null(restored.Left);
+            Assert.Null(restored.Top);
             Assert.Equal(0.71, restored.Opacity);
             Assert.True(restored.PositionLocked);
             Assert.Equal("Alt+Shift+L", restored.Hotkey);
@@ -93,7 +95,10 @@ public sealed class WindowsAdapterTests
             Assert.InRange(display.WorkArea.Bottom, display.MonitorBounds.Y, display.MonitorBounds.Bottom);
             Assert.True(display.DpiX >= 96 && display.DpiY >= 96);
         });
-        Assert.Equal(displays.Count, DisplayTopologyConverter.ToDips(displays).Count);
+        var reset = OverlayPlacement.Reset(new DipSize(38, 38), displays);
+        var primary = displays.Single(display => display.IsPrimary).WorkArea;
+        Assert.InRange(reset.X, primary.X, primary.Right);
+        Assert.InRange(reset.Y, primary.Y, primary.Bottom);
     }
 
     [Fact]
@@ -323,7 +328,7 @@ public sealed class WindowsAdapterTests
 
             var settings = new SettingsStore(settingsPath).Load();
 
-            Assert.True(double.IsNaN(settings.Left));
+            Assert.Null(settings.PositionX);
             Assert.Null(LeagueClientDiscovery.ParseLockfile(lockfilePath));
         }
         finally

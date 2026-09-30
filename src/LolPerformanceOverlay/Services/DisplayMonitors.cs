@@ -4,14 +4,16 @@ using LolPerformanceOverlay.Core.Interaction;
 namespace LolPerformanceOverlay.Services;
 
 /// <summary>
-/// Lists the attached monitors in this process's screen coordinates with the DPI Windows reports
-/// for each. While the process is only system DPI aware, that is the system DPI for every monitor.
-/// Reads Win32 directly so the app does not load WinForms just for <c>Screen.AllScreens</c>.
+/// Lists the attached monitors in physical pixels with each monitor's own DPI. That holds only
+/// because the app is PerMonitorV2 (app.manifest): a system-aware process gets virtualized
+/// rectangles and the system DPI for every monitor. Reads Win32 directly so the app does not load
+/// WinForms just for <c>Screen.AllScreens</c>.
 /// </summary>
 public static class DisplayMonitors
 {
     private const uint MonitorInfoFlagPrimary = 1;
     private const uint MonitorDefaultToPrimary = 1;
+    private const uint MonitorDefaultToNearest = 2;
     private const int MonitorDpiTypeEffective = 0;
     private const int SmCxScreen = 0;
     private const int SmCyScreen = 1;
@@ -49,6 +51,16 @@ public static class DisplayMonitors
         }
 
         return displays;
+    }
+
+    /// <summary>The work area of the monitor a window is on, or null when Windows cannot say.</summary>
+    public static PixelRect? WorkAreaFor(IntPtr window)
+    {
+        var info = new MonitorInfoEx { Size = Marshal.SizeOf<MonitorInfoEx>() };
+        var monitor = MonitorFromWindow(window, MonitorDefaultToNearest);
+        return monitor != IntPtr.Zero && GetMonitorInfo(monitor, ref info) && info.Work.ToPixelRect().IsValid
+            ? info.Work.ToPixelRect()
+            : null;
     }
 
     private static PhysicalDisplayWorkArea? FromScreenMetrics(uint dpiX, uint dpiY)
@@ -105,6 +117,9 @@ public static class DisplayMonitors
 
     [DllImport("user32.dll")]
     private static extern IntPtr MonitorFromPoint(NativePoint point, uint flags);
+
+    [DllImport("user32.dll")]
+    private static extern IntPtr MonitorFromWindow(IntPtr window, uint flags);
 
     [DllImport("user32.dll")]
     private static extern int GetSystemMetrics(int index);
