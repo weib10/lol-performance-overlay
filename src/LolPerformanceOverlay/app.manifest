@@ -11,6 +11,12 @@
   <application xmlns="urn:schemas-microsoft-com:asm.v3">
     <windowsSettings>
       <longPathAware xmlns="http://schemas.microsoft.com/SMI/2016/WindowsSettings">true</longPathAware>
+      <!-- The only place WPF takes per-monitor DPI awareness from; without it the overlay is
+           system-aware and bitmap-stretched on any monitor scaled differently from the primary.
+           PerMonitor is the fallback for Windows 10 builds before 1607, and dpiAware covers
+           Windows versions that ignore dpiAwareness. -->
+      <dpiAware xmlns="http://schemas.microsoft.com/SMI/2005/WindowsSettings">true/pm</dpiAware>
+      <dpiAwareness xmlns="http://schemas.microsoft.com/SMI/2016/WindowsSettings">PerMonitorV2, PerMonitor</dpiAwareness>
     </windowsSettings>
   </application>
   <compatibility xmlns="urn:schemas-microsoft-com:compatibility.v1">

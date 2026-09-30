@@ -36,6 +36,28 @@ public sealed class PackagePolicyTests
     }
 
     [Fact]
+    public void TheShippedManifestDeclaresPerMonitorV2()
+    {
+        var manifest = System.Xml.Linq.XDocument.Load(
+            Path.Combine(FindRepositoryRoot(), "src", "LolPerformanceOverlay", "app.manifest"));
+
+        PackageBuilder.ValidateDpiAwareness(manifest);
+    }
+
+    [Theory]
+    [InlineData("")]
+    [InlineData("<dpiAwareness xmlns=\"http://schemas.microsoft.com/SMI/2016/WindowsSettings\">PerMonitor</dpiAwareness>")]
+    [InlineData("<dpiAwareness xmlns=\"http://schemas.microsoft.com/SMI/2016/WindowsSettings\">System, PerMonitorV2</dpiAwareness>")]
+    public void AManifestWithoutPerMonitorV2FirstIsRejected(string dpiAwareness)
+    {
+        var manifest = System.Xml.Linq.XDocument.Parse(
+            "<assembly xmlns=\"urn:schemas-microsoft-com:asm.v1\"><application xmlns=\"urn:schemas-microsoft-com:asm.v3\">" +
+            $"<windowsSettings>{dpiAwareness}</windowsSettings></application></assembly>");
+
+        Assert.Throws<InvalidDataException>(() => PackageBuilder.ValidateDpiAwareness(manifest));
+    }
+
+    [Fact]
     public void BinaryViewsExposeUtf16ContentToSecretScanner()
     {
         var syntheticSensitiveValue = "RG" + "API-" + new string('S', 24);
