@@ -1,11 +1,13 @@
 using System.Reflection;
 using System.IO;
+using System.Runtime.CompilerServices;
 using System.Runtime.ExceptionServices;
 using System.Runtime.InteropServices;
 using System.Text.RegularExpressions;
 using System.Windows;
 using System.Windows.Controls;
 using System.Windows.Documents;
+using System.Windows.Interop;
 using System.Windows.Media;
 using System.Windows.Threading;
 using LolPerformanceOverlay.Core;
@@ -230,6 +232,16 @@ public sealed class WindowsAdapterTests
                 window.Close();
             }
         });
+    }
+
+    [Fact]
+    public void TheAppRendersInSoftwareBeforeItCreatesAnyWindow()
+    {
+        // The static constructor is the earliest point the shipping EXE reaches App, ahead of
+        // the first window. Hardware rendering costs the overlay memory and gains it nothing.
+        RuntimeHelpers.RunClassConstructor(typeof(App).TypeHandle);
+
+        Assert.Equal(RenderMode.SoftwareOnly, RenderOptions.ProcessRenderMode);
     }
 
     [Fact]

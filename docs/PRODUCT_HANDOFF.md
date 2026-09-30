@@ -1,6 +1,6 @@
 # LoL 即時表現 Overlay：產品與 Codex 交接文件
 
-更新日期：2026-09-29
+更新日期：2026-10-01
 
 > 這份文件是累積寫成的，第 1–14 節多數段落寫於 2026-08-10 或更早，第 15 節以後是後續
 > 里程碑。閱讀時請注意：較早的段落描述問題或計畫時，若後面的里程碑已經處理，內文會加
@@ -830,7 +830,7 @@ WinForms 原本只用在系統匣（`NotifyIcon`＋`ContextMenuStrip`）與 `Scr
   | 這個分支 | 82／80／82 MB | 75 MB | 0.09% |
 
 - 30 分鐘 Replay（上面那輪真滑鼠操作之後，放在副螢幕不動）：私用工作集 159 → 166.9 MB，第 14 分鐘起持平到結束，CPU 0.02–0.05%。
-- 反覆移動視窗會讓記憶體上升，但兩個版本都一樣，不是這個分支造成的：從外部把視窗在兩台螢幕間來回搬 200 次，main 70.6 → 151.8 MB，這個分支 69.8 → 145.7 MB，handle 數持平。原因還沒查，另外追。
+- 反覆移動視窗會讓記憶體上升，但兩個版本都一樣，不是這個分支造成的：從外部把視窗在兩台螢幕間來回搬 200 次，main 70.6 → 151.8 MB，這個分支 69.8 → 145.7 MB，handle 數持平。[狀態：原因是 WPF 硬體渲染，已改用軟體渲染，見第 21 節。]
 
 **還沒驗證**：Windows 10；不登出直接改縮放比例；兩台縮放比例相差 2 倍以上的配置（兩段式移動只在模擬中走過，開發機只差 1.5 倍）；高 DPI 螢幕在右邊或上方的真實拖曳（只有模擬）。
 
@@ -842,4 +842,81 @@ WinForms 原本只用在系統匣（`NotifyIcon`＋`ContextMenuStrip`）與 `Scr
 
 - 最大的一塊（壓縮造成的約 80 MB）改一個設定就能拿到。同樣的畫面用 Rust（Win32＋Direct2D，或 egui／Slint）估計 20–50 MB（未實測），相對不壓縮的 .NET 10 再省約 40–70 MB。
 - 代價是全部重寫：產品程式約 9,500 行（`OverlayWindow` 1,600、`App` 830、Core 5,000）、244 個測試方法；WPF 內建的 DirectWrite 中文排版、PerMonitorV2 DPI（WPF 也要自己在 manifest 宣告，見上方「PerMonitorV2（#19）」）、tooltip、設定視窗都要自己做；PackageBuilder 對 .NET assembly metadata 的檢查要重寫。
-- 若之後記憶體仍是首要考量，先做一個只畫 Expanded 面板的拋棄式 Rust 原型實測，再決定要不要重寫。
+- 若之後記憶體仍是首要考量，先做一個只畫 Expanded 面板的拋棄式 Rust 原型實測，再決定要不要重寫。[狀態：第 21 節改用軟體渲染後，Expanded 靜止時約 38–47 MB，已落在上面估的 Rust 區間內，重寫的記憶體理由大多不存在了。]
+
+## 21. 2026-10-01：拖到另一台螢幕後記憶體變多，改用軟體渲染
+
+驗證 issue #19 時發現：一直移動 overlay，私人工作集會從約 70 MB 長到約 150 MB。`main` 與 `per-monitor-v2` branch 都一樣，不是那個 branch 造成的。
+
+### 量測方法
+
+- 出貨設定的單檔 EXE（與 PackageBuilder 相同的 publish 參數），`--demo-expanded` 啟動，暖機 20 秒。
+- 另一個程序用 `SetWindowPos(SWP_NOSIZE|SWP_NOZORDER|SWP_NOACTIVATE)` 移動 overlay 視窗，每 20 次來回取樣一次「私人工作集」（`Win32_PerfFormattedData_PerfProc_Process.WorkingSetPrivate`）。
+- 另外記錄 private bytes、handle 數、程序 CPU 時間，以及用 `VirtualQueryEx` 分類的已認可記憶體（private／mapped／image）。
+- managed heap 用 `DOTNET_STARTUP_HOOKS` 掛一個只在量測時載入的 hook，每 2 秒記錄 `GC.GetGCMemoryInfo` 與 GC 次數。app 程式碼不用改。
+- 當時另一個 session 正在跑自己的 overlay，單一實例 mutex 會擋。量測用的 EXE 是出貨 EXE 的複本：改了 mutex 名稱裡的一個字元並改檔名，其餘位元組都相同。
+- 開發機：Windows 11、Ryzen 7 7700、4K 150% 主螢幕＋左側 1080p 100% 副螢幕。
+
+### 根因
+
+| 情境（`main`，硬體渲染） | 開始 | 結束 |
+|---|---:|---:|
+| 不移動，同樣時長 | 69.5 MB | 82.4 MB |
+| 同一台螢幕內來回 200 次 | 70.5 MB | 83.9 MB |
+| 跨螢幕來回 200 次 | 70.9 MB | 149.8 MB |
+| 跨螢幕來回 1,500 次（每次移動間隔 50 ms） | 70.1 MB | 300 次時 156.9 MB，之後到 1,500 次都停在 153–159 MB |
+| 像拖曳一樣每步 30 px 跨過邊界，20 次來回（2,440 步） | 71.3 MB | 106.9 MB |
+
+- 成長只發生在**跨螢幕**。同一台螢幕內移動，和完全不動差不多（兩者都因 demo 資料更新而多約 12 MB）。
+- 有上限：約 300 次來回後停在比基線多約 85 MB，之後不再長。停止移動後不會退回，但也不會再長。使用者拖著真的滑鼠測完後停在 160–167 MB、閒置 16 分鐘不變，符合這個行為。
+- 第一次跨過去就多 8.6 MB、handle 從約 1,200 跳到約 1,700。之後每次跨螢幕約多 0.5 MB，直到上限。
+- 不是 managed：GC 已認可記憶體只從 8 MB 到 25 MB，其餘在 native。
+- 也不是 `OnLocationChanged` → `App.OnOverlayPositionChanged` 的存檔：demo 模式下那條路徑一開頭就 return，但成長照樣發生。
+- 是 WPF 的硬體渲染。同一顆 EXE 只把 `RenderOptions.ProcessRenderMode` 設成 `SoftwareOnly`（用上面的 hook 設，不改程式），跨螢幕來回 300 次從 39.3 MB 到 50.4 MB，和不動時差不多。layered window（`AllowsTransparency`）在硬體模式下，每台螢幕都要有自己的 Direct3D 資源，視窗在螢幕之間移動時會一直重建。
+
+### 決定：整個程序改用軟體渲染
+
+`App` 的 static constructor 在任何視窗建立前設定 `RenderOptions.ProcessRenderMode = RenderMode.SoftwareOnly`。
+
+- 為什麼值得修：上限約 85 MB，不是無限洩漏，但一個剛好在兩台螢幕之間拖來拖去的使用者就會碰到。而且軟體渲染連靜止時的基線也少約 30 MB。
+- 為什麼不會變慢：overlay 是約每秒重畫一次的小視窗。layered window 在硬體模式下本來每次重畫都要把畫面從 GPU 讀回 CPU，交給 `UpdateLayeredWindow`，所以 GPU 在這裡省不了什麼。軟體渲染也不會跟遊戲搶 GPU。
+- 沒採用的方案：
+  - 不修，只記錄上限。放棄了基線那 30 MB，理由不足。
+  - 只把 overlay 視窗的 `HwndTarget.RenderMode` 設成軟體。tooltip、右鍵選單、設定視窗都是各自的視窗，還是會建立 Direct3D 裝置，拿不到基線的節省。這個方案沒有實測。
+- 畫面：同一個 demo 時間點截圖（780×453 實體像素），改前改後看不出差異。
+- 自動測試：Windows 測試新增 `TheAppRendersInSoftwareBeforeItCreatesAnyWindow`，執行 `App` 的 static constructor 後檢查 `RenderOptions.ProcessRenderMode`。拿掉那行設定，這項測試會失敗（已實際試過）。
+
+### 改前改後（同一方法，交錯執行）
+
+跨螢幕來回 200 次，每次移動間隔 0.5 秒：
+
+| | 開始 | 200 次後 | 停止 30 秒後 | handle | 程序 CPU 時間（開始到 200 次） |
+|---|---:|---:|---:|---:|---:|
+| 改前，第 1 次 | 70.3 MB | 154.4 MB | 156.0 MB | 1,190 → 1,673 | 4.1 秒 |
+| 改前，第 2 次 | 69.8 MB | 151.8 MB | 152.4 MB | 1,206 → 1,665 | 4.5 秒 |
+| 改後，第 1 次 | 41.8 MB | 49.5 MB | 49.7 MB | 572 → 514 | 4.8 秒 |
+| 改後，第 2 次 | 39.2 MB | 48.7 MB | 53.8 MB | 566 → 513 | 5.8 秒 |
+
+- 不移動 3 分鐘（第 20 節的方法，各 1 次）：改前 70.4 → 80.2 MB，改後 38.4 → 46.6 MB。Dot 模式（`--demo`，1 分鐘）：改前 63.9 → 70.9 MB，改後 30.6 → 38.4 MB。
+- private bytes：跨螢幕 200 次後，改前約 210 MB，改後約 70 MB。
+- CPU 代價：跨螢幕那組多約 15–40%，閒置 3 分鐘多約 13%（2.6 → 3.0 秒）。換算成整台機器（16 執行緒）仍約 0.1–0.2%，遠低於第 7 節 2% 的門檻。單次量測，雜訊不小。
+- `SetWindowPos` 在 overlay 處理完才返回，可以當作 UI 執行緒跟上移動的粗略指標。改前改後都一樣：平均 0.7–0.8 ms，P99 1.0–1.5 ms，偶爾最大 11–14 ms（兩邊都有）。
+
+### 還沒驗證
+
+- 真滑鼠拖曳的手感（上面的移動是程式送的）。
+- LoL 全螢幕無邊框下的畫面與 CPU。
+- 真滑鼠拖曳在軟體渲染下跨螢幕時的 CPU（見下一小節）。
+
+### 合併 PerMonitorV2（#19）之後再量一次
+
+量測期間 `main` 合進了 PerMonitorV2。對照組是合併後的程式碼、只拿掉軟體渲染那一行；方法同上，各跑 1 次。
+
+| | 開始 | 跨螢幕來回 200 次後 | 拖曳式 20 次來回後 |
+|---|---:|---:|---:|
+| 合併後，硬體渲染 | 73.5 MB | 145.2 MB | 70.1 → 165.9 MB |
+| 合併後，軟體渲染 | 38.6 MB | 52.1 MB | 39.2 → 58.3 MB |
+
+- 記憶體結論不變。
+- 這組的 CPU 和 `SetWindowPos` 時間不能拿來評估拖曳：PMv2 會把外部程式移到別台的 overlay 拉回 home 螢幕（第 20 節「PerMonitorV2」），所以每次移動都多一輪換 DPI 與拉回。兩個版本的 `SetWindowPos` 平均都約 17 ms；拖曳式那組兩者都吃掉約一個核心，軟體渲染多約 15%。真的滑鼠拖曳每次跨螢幕只換一次 DPI，這個數字沒有量。
+- PMv2 已經把拖曳改成每個滑鼠事件只呼叫一次 `SetWindowPos`。
