@@ -171,6 +171,20 @@ public sealed class OverlayPlacementTests
     }
 
     [Fact]
+    public void LegacyDipsThatTwoMonitorsOldRangesBothCoverBelongToThePrimary()
+    {
+        // The 200 % monitor's old range starts at 1920 / 2 = 960, inside the primary's 0..1920.
+        PhysicalDisplayWorkArea[] displays =
+        [
+            new("right", new PixelRect(1920, 0, 3840, 2160), new PixelRect(1920, 0, 3840, 2100), 192, 192),
+            new("primary", new PixelRect(0, 0, 1920, 1080), new PixelRect(0, 0, 1920, 1040), 96, 96, IsPrimary: true)
+        ];
+
+        Assert.Equal(new PixelPoint(1500, 500), OverlayPlacement.FromLegacyDips(new DipPoint(1500, 500), displays));
+        Assert.Equal(new PixelPoint(4000, 1000), OverlayPlacement.FromLegacyDips(new DipPoint(2000, 500), displays));
+    }
+
+    [Fact]
     public void LegacyDipsOutsideEveryOldMonitorUseThePrimaryDpiAndAreThenPulledOnScreen()
     {
         var converted = OverlayPlacement.FromLegacyDips(new DipPoint(-3000, 100), DevDesktop);

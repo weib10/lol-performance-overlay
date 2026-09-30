@@ -124,7 +124,7 @@ public sealed class PerMonitorDpiTests
     }
 
     [Fact]
-    public void StartupPlacesTheWindowAtTheSavedPositionAndReportsItExactlyOnce()
+    public void StartupPlacesTheWindowAtTheSavedPositionWithoutReportingIt()
     {
         RunOnPerMonitorV2Thread(() =>
         {
@@ -138,7 +138,34 @@ public sealed class PerMonitorDpiTests
             try
             {
                 Assert.Equal(saved, TopLeft(handle));
-                Assert.Equal(saved, Assert.Single(reported));
+                Assert.Empty(reported);
+            }
+            finally
+            {
+                window.Close();
+            }
+        });
+    }
+
+    [Fact]
+    public void ASavedPositionOffEveryMonitorIsPulledBackButNotReported()
+    {
+        // The monitor it was saved on may only be unplugged today; writing the pulled-back
+        // position would lose the saved one for good.
+        RunOnPerMonitorV2Thread(() =>
+        {
+            var reported = new List<PixelPoint>();
+            var window = new OverlayWindow(new AppSettings { PositionX = 900_000, PositionY = 900_000 });
+            window.PositionChanged += (x, y) => reported.Add(new PixelPoint(x, y));
+
+            var handle = new WindowInteropHelper(window).EnsureHandle();
+            try
+            {
+                var topLeft = TopLeft(handle);
+                Assert.Contains(Displays(), display =>
+                    topLeft.X >= display.WorkArea.X && topLeft.X < display.WorkArea.X + display.WorkArea.Width &&
+                    topLeft.Y >= display.WorkArea.Y && topLeft.Y < display.WorkArea.Y + display.WorkArea.Height);
+                Assert.Empty(reported);
             }
             finally
             {

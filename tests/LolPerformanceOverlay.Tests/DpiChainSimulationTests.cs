@@ -47,6 +47,67 @@ public sealed class DpiChainSimulationTests
         Assert.Equal(1, desktop.LongestChain);
     }
 
+    [Theory]
+    [InlineData("low-left")]
+    [InlineData("low-above")]
+    public void ThePointHeldStaysUnderTheCursorAcrossTheDpiChange(string arrangement)
+    {
+        // Held near the corner that leads the way onto the 100 % monitor, as when grabbing a
+        // title bar. Keeping the centre alone would leave the cursor outside the shrunk panel.
+        var (displays, start, end) = Arrangement(arrangement);
+        var controller = new OverlayPlacementController();
+        var desktop = new SimulatedDesktop(displays, controller, ExpandedInGame, new PixelPoint(start.X - 40, start.Y - 20), 144);
+
+        controller.BeginGesture(start, desktop.TopLeft);
+        controller.BeginDrag();
+        desktop.DragAlong(start, end);
+
+        Assert.Equal(96u, desktop.Dpi);
+        Assert.Equal(1, desktop.DpiChanges);
+        Assert.InRange(end.X, desktop.Rect.X, desktop.Rect.X + desktop.Rect.Width);
+        Assert.InRange(end.Y, desktop.Rect.Y, desktop.Rect.Y + desktop.Rect.Height);
+
+        desktop.DragAlong(end, start);
+
+        Assert.Equal(144u, desktop.Dpi);
+        Assert.Equal(2, desktop.DpiChanges);
+        Assert.InRange(start.X, desktop.Rect.X, desktop.Rect.X + desktop.Rect.Width);
+        Assert.InRange(start.Y, desktop.Rect.Y, desktop.Rect.Y + desktop.Rect.Height);
+    }
+
+    [Theory]
+    [MemberData(nameof(Arrangements))]
+    public void WhereverThePanelIsHeldACrossingNeverBouncesTheDpi(string arrangement, bool expanded)
+    {
+        var (displays, start, end) = Arrangement(arrangement);
+        var content = expanded ? ExpandedInGame : Dot;
+        double[] fractions = [0, 0.25, 0.5, 0.75, 1];
+        foreach (var fractionX in fractions)
+        {
+            foreach (var fractionY in fractions)
+            {
+                var controller = new OverlayPlacementController();
+                var held = new PixelPoint(
+                    (int)(content.Width * 1.5 * fractionX),
+                    (int)(content.Height * 1.5 * fractionY));
+                var desktop = new SimulatedDesktop(
+                    displays, controller, content, new PixelPoint(start.X - held.X, start.Y - held.Y), 144);
+
+                controller.BeginGesture(start, desktop.TopLeft);
+                controller.BeginDrag();
+                desktop.DragAlong(start, end);
+                Assert.Equal(96u, desktop.Dpi);
+                desktop.DragAlong(end, start);
+
+                Assert.Equal(144u, desktop.Dpi);
+                Assert.False(desktop.LoopDetected);
+                Assert.Equal(0, controller.ForcedDpiPlacementCount);
+                Assert.Equal(2, desktop.DpiChanges);
+                Assert.Equal(1, desktop.LongestChain);
+            }
+        }
+    }
+
     [Fact]
     public void KeepingTheTopLeftLoopsForeverWhenTheHigherDpiMonitorIsOnTheLeft()
     {
