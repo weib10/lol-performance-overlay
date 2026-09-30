@@ -714,7 +714,7 @@ WinForms 原本只用在系統匣（`NotifyIcon`＋`ContextMenuStrip`）與 `Scr
 - `TrayIconService`：
   - 用 `Shell_NotifyIcon`（NOTIFYICON_VERSION_4）加原生右鍵選單，對外介面不變。
   - 圖示掛在隱藏的 top-level 視窗上。Explorer 重啟時會送 `TaskbarCreated` 廣播，收到後重新加回圖示；message-only 視窗收不到廣播。
-  - 選單每次打開時重建；位置用 `GetCursorPos`。Explorer 傳來的錨點是實體像素，程式目前只有 system DPI aware，兩者對不上。
+  - 選單每次打開時重建；位置用 `GetCursorPos`。當時程式只有 system DPI aware，Explorer 傳來的實體像素錨點對不上；改成 PerMonitorV2 之後兩者都是實體像素，`GetCursorPos` 仍然正確。
   - 選到的指令等 window procedure 返回後才執行。
 - 新增 `DisplayMonitors`：用 `EnumDisplayMonitors`／`GetMonitorInfo`／`GetDpiForMonitor`，產出和原本相同的 `PhysicalDisplayWorkArea`。
 - 使用者看得到的差異：
@@ -763,7 +763,7 @@ WinForms 原本只用在系統匣（`NotifyIcon`＋`ContextMenuStrip`）與 `Scr
 
 工作管理員的數字沒變：WinForms 的 assembly 本來就是從 EXE 映射進來，實際碰到的頁面很少。收穫是朋友下載少約 10 MB（15%）、解壓後的 EXE 少 32 MB。記憶體量測用的 EXE，選單位置還是 wParam 錨點版；改成 `GetCursorPos` 後重新量了大小與啟動時間。
 
-量測時查了程式的 DPI 感知模式，改動前後都是 **system aware**，不是 PerMonitorV2。原因是 csproj 的 `ApplicationHighDpiMode=PerMonitorV2` 只給 WinForms 的 `ApplicationConfiguration` 產生器用，對 WPF 無效，而 `app.manifest` 沒有 `dpiAwareness`。影響是混合 DPI 時，非主螢幕上的 overlay 會被 Windows 點陣縮放而變糊，`GetDpiForMonitor` 對每台螢幕也都回報系統 DPI。修正會牽動座標換算與已存的位置，要在混合 DPI 的真機上驗證，所以沒放進這個 PR。[狀態：已開 issue #19，下一個 session 處理。]
+量測時查了程式的 DPI 感知模式，改動前後都是 **system aware**，不是 PerMonitorV2。原因是 csproj 的 `ApplicationHighDpiMode=PerMonitorV2` 只給 WinForms 的 `ApplicationConfiguration` 產生器用，對 WPF 無效，而 `app.manifest` 沒有 `dpiAwareness`。影響是混合 DPI 時，非主螢幕上的 overlay 會被 Windows 點陣縮放而變糊，`GetDpiForMonitor` 對每台螢幕也都回報系統 DPI。修正會牽動座標換算與已存的位置，所以另外處理。[狀態：已在 #19 修正，見下方「PerMonitorV2（#19）」。]
 
 ### 系統匣名稱對齊、設定視窗被裁切
 
@@ -783,10 +783,63 @@ WinForms 原本只用在系統匣（`NotifyIcon`＋`ContextMenuStrip`）與 `Scr
   - 說明文字自動換行。
 - 另一項新的 Windows 測試實際打開設定視窗，檢查每行文字都在視窗內、「儲存」看得到或捲得到。改回原本的排版會失敗：「儲存」底部在 543 DIP，但視窗只顯示到 503 DIP。拿掉換行也會失敗。
 
+### PerMonitorV2（#19）
+
+改動前程式只有 system DPI aware：混合縮放時，非主螢幕上的 overlay 被 Windows 點陣縮放而變糊。
+
+**查 DPI 感知模式的方法**：從另一個行程對 overlay 的 HWND 呼叫 `AreDpiAwarenessContextsEqual(GetWindowDpiAwarenessContext(hwnd), DPI_AWARENESS_CONTEXT_PER_MONITOR_AWARE_V2)`，結果要是 True。`GetAwarenessFromDpiAwarenessContext` 對 V1 和 V2 都回傳 2，分不出來。查的工具本身也要是 PMv2，否則讀到的座標和截圖都被虛擬化。
+
+**實測後才確定的事**（開發機：4K 150% 主螢幕，左下接 1080p 100%）：
+- manifest 要宣告 `dpiAwareness`；csproj 的 `ApplicationHighDpiMode` 只給 WinForms 用。
+- PMv2 下 WPF 的 `Left/Top` 用視窗「當下」的 DPI 換算，跨 DPI 移動後就過時、之後也不會更正。所以 issue 原本「保留 DIP、沿用 `DisplayTopologyConverter`」的做法行不通：位置一律改用實體像素，converter 刪掉。
+- Windows 套用 `WM_DPICHANGED` 的 RECT 之後，會在同一個 `SetWindowPos` 裡立刻重新判斷；RECT 的大半面積若回到舊螢幕，會無限重送（實測連續 31 次）。
+- 用 `SWP_NOSIZE` 移到別的 DPI 的螢幕時，舊大小的視窗若大半還在原螢幕，完全不會觸發 `WM_DPICHANGED`。
+- 舊版存下的 DIP = 實體座標 × 96 ÷ 該螢幕 DPI，和系統 DPI 無關。
+
+**設計**：
+- `OverlayPlacementController`（Core）集中所有放置規則，`OverlayWindow` 只讀寫 Win32。
+  - home：使用者最後把 overlay 放在哪一台。只有啟動、重設、拖曳結束會改變；其他 clamp 都留在 home。所以外部程式把 overlay 移到別台，會被拉回 home（設計如此）。
+  - 拖曳中只有拖曳本身能移動視窗。
+  - 每一次 `WM_DPICHANGED` 都改寫建議 RECT：拖曳中優先以游標為中心縮放，讓抓住的那一點留在游標下；那樣會讓大半面積回到舊螢幕時，才改成保持視窗中心（抓著面板尾端拖時會發生，面板會縮離游標，放開後位置正常）。非拖曳時收斂到「home DPI 大小、從這一串起點 clamp 出來的位置」。同一串第 3 次起強制放進目標螢幕。
+  - 移到別的 DPI、卻不會觸發 `WM_DPICHANGED` 的移動，先經過目標螢幕中央的一點（兩段式移動）。
+- 切換模式時先定位、再改大小，靠在交界處的面板不會換 DPI、不會閃。Expanded 內容長高後也會重新 clamp（以前沒有）。
+- `settings.json` 改存實體像素 `PositionX/PositionY`，用 double 讀寫並在載入時檢查範圍：用 int 的話，一個壞掉的數字會讓整份設定（含快捷鍵和 Riot key）退回預設值。舊的 `Left/Top` 只讀一次，換算後不再寫出。舊版程式讀新檔會回到預設位置。
+- 啟動時只有「舊格式位置換算後不需調整」才寫回設定檔。被拉回螢幕內的位置不寫：存在外接螢幕上的位置，外接暫時沒接時啟動一次，接回後仍會回到原位。
+- 舊格式位置同時落在兩台螢幕的舊 DIP 範圍時（例如 100% 主螢幕右邊接 200% 螢幕），判給主螢幕，因為主螢幕的範圍在任何排列下都精確。
+- 設定視窗的高度上限改用它所在螢幕的工作區。
+- 啟動參數 `--diagnostics` 在右鍵選單加一項「診斷資訊」，顯示三個計數器：DPI 變更次數、強制放置次數、兩段式移動沒觸發的次數。後兩個理論上都是 0。
+
+**測試**：核心 302 → 375、Windows 18 → 37（其中 1 項只在混合 DPI 機器上跑：設 `LOL_OVERLAY_MIXED_DPI_TESTS=1`，其他地方記成 skipped）、PackageBuilder 32 → 36。
+- 核心測試用一個模擬 Windows `WM_DPICHANGED` 行為的模型，驅動 controller 跑五種螢幕排列（低 DPI 在左、右、上、下，以及部分重疊）的來回拖曳，還有非拖曳的長高與兩段式移動。拿掉改寫（只保留左上角）時，模型會重現無限循環。
+- 每種排列再用 25 個抓點（面板寬高的 0、¼、½、¾、1）來回拖：每次跨越只換一次 DPI，沒有強制放置。
+- 故意改壞 40 種方式（Core 29、Windows 11），每種都有測試失敗。
+- CI 機器沒有混合 DPI，`WndProc` 改寫 RECT、hook 先於 WPF、兩段式移動這幾件事在 CI 上沒有覆蓋，只靠開發機那一項測試與下面的實機驗證。
+- 在這台開發機跑混合 DPI 專用測試：靠交界處 Dot → Compact → Expanded → Dot 的 `WM_DPICHANGED` 次數，先定位為 0 次；改成先改大小再拉回則為 2 次（144 → 96）。50 次「啟動到副螢幕、重設回主螢幕」共跨 DPI 100 次以上，強制放置與未觸發都是 0。
+
+**開發機實機驗證**（用出貨 EXE；PMv2 probe 送訊息與截圖）：
+- 執行中的 overlay 是 PMv2（上面的方法，True）。
+- 一般模式讀 `settings.json`：存在副螢幕右緣的位置原樣放回（DPI 96）。舊格式的主螢幕 DIP (2000,500) 換成 (3000,750)，副螢幕 DIP (-1500,900) 換成 (-1500,900)，落在所有螢幕外的 (-3000,100) 拉回副螢幕 (-1910,742)。重新啟動回到同一位置。
+- 清晰度：Expanded 在 100% 副螢幕上，這個分支是 520×302 實體像素、1:1 繪製；main 是以 150% 畫好再由 Windows 縮成同樣大小，文字邊緣發糊。
+- 真滑鼠（2026-09-30，使用者操作）：Dot、Compact、Expanded 各自跨螢幕來回拖，含抓面板邊緣；Dot 點一下切換模式不移動、拖曳不切換；拖到一半按 Alt+Tab 後仍跟著游標直到放開；Dot 放在副螢幕中間再切到 Expanded 仍留在副螢幕；從副螢幕用系統匣「重設 Overlay 位置」與設定視窗的重設都回到主螢幕；設定視窗在副螢幕上沒有被切掉。結束時三個計數器是 DPI 變更 71、強制放置 0、未觸發 0。這輪用的是「拖曳中保持中心」的版本；改成優先以游標縮放之後只跑過模擬與混合 DPI 測試，還沒有用真滑鼠再拖一次。
+- 焦點：overlay 在副螢幕時前景視窗仍是別的程式；⚙、•、—、↗ 的位置 `WM_NCHITTEST` 都回傳可點。鎖定時的 click-through 只有既有自動測試，這輪沒有另外手測。
+- 記憶體與 CPU（`--demo-expanded`，暖機 20 秒後每 10 秒取樣 3 分鐘，兩個版本交錯各 3 輪，工作管理員的「私用工作集」）：
+
+  | 版本 | 結束時 | 最低 | CPU（佔整機） |
+  | --- | --- | --- | --- |
+  | main | 82／81／82 MB | 72–73 MB | 0.09–0.10% |
+  | 這個分支 | 82／80／82 MB | 75 MB | 0.09% |
+
+- 30 分鐘 Replay（上面那輪真滑鼠操作之後，放在副螢幕不動）：私用工作集 159 → 166.9 MB，第 14 分鐘起持平到結束，CPU 0.02–0.05%。
+- 反覆移動視窗會讓記憶體上升，但兩個版本都一樣，不是這個分支造成的：從外部把視窗在兩台螢幕間來回搬 200 次，main 70.6 → 151.8 MB，這個分支 69.8 → 145.7 MB，handle 數持平。原因還沒查，另外追。
+
+**還沒驗證**：Windows 10；不登出直接改縮放比例；兩台縮放比例相差 2 倍以上的配置（兩段式移動只在模擬中走過，開發機只差 1.5 倍）；高 DPI 螢幕在右邊或上方的真實拖曳（只有模擬）。
+
+**已知限制**：螢幕 ID 是 GDI device name，重新插拔後可能對應到另一台，overlay 會被 clamp 到那台，仍然可見。系統匣圖示仍照 system DPI 取圖；以系統管理員身分執行時 UIPI 擋掉 `TaskbarCreated`（兩者都在 issue 的範圍外）。
+
 ### 評估中：改用 Rust 重寫（待使用者決定）
 
 使用者 2026-09-29 提出，動機是省記憶體。建議先不做：
 
 - 最大的一塊（壓縮造成的約 80 MB）改一個設定就能拿到。同樣的畫面用 Rust（Win32＋Direct2D，或 egui／Slint）估計 20–50 MB（未實測），相對不壓縮的 .NET 10 再省約 40–70 MB。
-- 代價是全部重寫：產品程式約 9,500 行（`OverlayWindow` 1,600、`App` 830、Core 5,000）、244 個測試方法；WPF 內建的 DirectWrite 中文排版、PerMonitorV2 DPI（[更正：實測程式目前只有 system DPI aware，見下方「拿掉 WinForms」]）、tooltip、設定視窗都要自己做；PackageBuilder 對 .NET assembly metadata 的檢查要重寫。
+- 代價是全部重寫：產品程式約 9,500 行（`OverlayWindow` 1,600、`App` 830、Core 5,000）、244 個測試方法；WPF 內建的 DirectWrite 中文排版、PerMonitorV2 DPI（WPF 也要自己在 manifest 宣告，見上方「PerMonitorV2（#19）」）、tooltip、設定視窗都要自己做；PackageBuilder 對 .NET assembly metadata 的檢查要重寫。
 - 若之後記憶體仍是首要考量，先做一個只畫 Expanded 面板的拋棄式 Rust 原型實測，再決定要不要重寫。
