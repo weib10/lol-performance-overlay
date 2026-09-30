@@ -232,6 +232,8 @@ internal static class PackageBuilder
                 $"Windows app.manifest version '{manifestVersion}' does not match '{expectedAssemblyVersion}'.");
         }
 
+        ValidateDpiAwareness(manifest);
+
         var readmePath = ResolveInsideRoot(context.Root, config.Paths.Readme);
         var readme = File.ReadAllText(readmePath);
         var readmeVersionMatch = Regex.Match(
@@ -318,6 +320,27 @@ internal static class PackageBuilder
             template.Replace(config.Product.VersionPlaceholder, context.Version, StringComparison.Ordinal),
             context.Version,
             requireAtLeastOne: true);
+    }
+
+    /// <summary>
+    /// The overlay must be PerMonitorV2 or it is bitmap-stretched, and blurry, on any monitor whose
+    /// scale differs from the primary's. Only the manifest can declare that for WPF: the csproj's
+    /// ApplicationHighDpiMode is read by the WinForms startup generator alone, which is how the
+    /// app ended up system-aware without anyone noticing (see docs/PRODUCT_HANDOFF.md section 20).
+    /// </summary>
+    internal static void ValidateDpiAwareness(XDocument manifest)
+    {
+        var awareness = manifest.Descendants()
+            .Where(element => element.Name.LocalName == "dpiAwareness")
+            .Select(element => element.Value.Trim())
+            .SingleOrDefault();
+        var first = awareness?.Split(',', StringSplitOptions.TrimEntries | StringSplitOptions.RemoveEmptyEntries)
+            .FirstOrDefault();
+        if (!string.Equals(first, "PerMonitorV2", StringComparison.OrdinalIgnoreCase))
+        {
+            throw new InvalidDataException(
+                $"Windows app.manifest must declare dpiAwareness PerMonitorV2 first; found '{awareness ?? "(none)"}'.");
+        }
     }
 
     internal static void ValidateDocumentVersions(
